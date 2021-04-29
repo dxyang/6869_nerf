@@ -1138,19 +1138,6 @@ optional = false
 python-versions = ">=3.5"
 
 [[package]]
-name = "sparseqr"
-version = "1.0.0"
-description = "Python wrapper for SuiteSparseQR"
-category = "main"
-optional = false
-python-versions = "*"
-
-[package.dependencies]
-cffi = ">=1.0.0"
-numpy = "*"
-scipy = "*"
-
-[[package]]
 name = "sqlparse"
 version = "0.4.1"
 description = "A non-validating SQL parser."
@@ -1372,7 +1359,7 @@ notebook = ">=4.4.1"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "bc6d3dfa012d33ded0077f835a7c1ee3896005983eb9695cc2fcd4bffb463a49"
+content-hash = "17e8fc5c2b3456c4ab1334321a239f91a3e3d8839e907ce20e79c249ac8e511d"
 
 [metadata.files]
 absl-py = [
@@ -2101,9 +2088,6 @@ six = [
 sniffio = [
     {file = "sniffio-1.2.0-py3-none-any.whl", hash = "sha256:471b71698eac1c2112a40ce2752bb2f4a4814c22a54a3eed3676bc0f5ca9f663"},
     {file = "sniffio-1.2.0.tar.gz", hash = "sha256:c4666eecec1d3f50960c6bdf61ab7bc350648da6c126e3cf6898d8cd4ddcd3de"},
-]
-sparseqr = [
-    {file = "sparseqr-1.0.0.tar.gz", hash = "sha256:c7ac89db7939130a9931ad1d64c31d12f42a7c2a8465004a8cb27f1f1aa8c64e"},
 ]
 sqlparse = [
     {file = "sqlparse-0.4.1-py3-none-any.whl", hash = "sha256:017cde379adbd6a1f15a61873f43e8274179378e95ef3fede90b5aa64d304ed0"},
