@@ -12,6 +12,8 @@ from tqdm import tqdm, trange
 
 import matplotlib.pyplot as plt
 
+curr_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(f"{curr_path}/nerf-pytorch")
 from run_nerf_helpers import *
 
 from load_llff import load_llff_data
@@ -645,11 +647,9 @@ def train():
         [0, 0, 1.0, 0.1],
         [0, 0, 0, 1.0]
     ])
-    T_0 = np.matmul(offset, pose)
+    T_offsetObject_world = np.matmul(T_offset_original, T_obj_world)
 
     # gradient based SE(3) optimization
-
-
 
 
     # Move testing data to GPU
