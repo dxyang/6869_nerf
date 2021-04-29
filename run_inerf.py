@@ -12,6 +12,8 @@ from tqdm import tqdm, trange
 
 import matplotlib.pyplot as plt
 
+curr_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(f"{curr_path}/nerf-pytorch")
 from run_nerf_helpers import *
 
 from load_llff import load_llff_data
@@ -632,26 +634,57 @@ def train():
     render_kwargs_test.update(bds_dict)
 
 
-    # let's do the inerf thing
+    '''
+    let's pick a random image that we want to estimate the pose of
+    '''
+
     img_i = np.random.choice(i_train)
     target = images[img_i]
     pose = poses[img_i, :3,:4]
     T_obj_world = poses[img_i, :4,:4]
     
     theta = np.pi / 6
-    T_offset_original = np.array([
+    T_cameraInit_world = np.array([
         [np.cos(theta), -np.sin(theta), 0, 0.05],
         [np.sin(theta), np.cos(theta), 0, -0.05],
         [0, 0, 1.0, 0.1],
         [0, 0, 0, 1.0]
     ])
-    T_0 = np.matmul(offset, pose)
+    T_offsetObject_world = np.matmul(T_offset_original, T_obj_world)
 
-    # gradient based SE(3) optimization
+    '''
+    go from our R6 parameterization of an offset to an SE3 transform we can premultiply T_0 by
+    TODO: torch-ify this
+    '''
+    # gradient based SE(3) optimization (numpy TODO: convert to torch operations)
+    screw_exp = np.random.normal(loc=0.0, scale=1e-6, size=(6)) # 6-vector of exponential coordinates
+    screw_axis, theta = AxisAng6(screw_exp) #screw axis omega, nu
+    omega = screw_axis[:3]
+    nu = screw_axis[4:]
 
+    # calculate the rotation exp([w] * theta)
+    skew_symmetric_omega = np.array([
+        [0, -omega[2], omega[1]], 
+        [omega[2], 0, -omega[0]], 
+        [-omega[1], omega[0], 0]
+    ]) # [w] in the paper
+    matrix_exp = MatrixExp3(skew_symmetric_omega * theta)
 
+    # calculate the translation K(S, theta)
+    K = np.matmul(
+        (np.eye(3) * theta + np.matmul((1 - np.cos(theta)), skew_symmetric_omega) + (theta - np.sin(theta)) * np.matmul(skew_symmetric_omega, skew_symmetric_omega)),
+        nu
+    )
+    
+    # exponential SE3 exp([S] * theta)
+    T_cameraOffset_cameraBefore = np.r_[np.c_[matrix_exp, K], [[0, 0, 0, 1]]]
 
+    # camera pose at this iteration
+    T_cameraTimeI_world = np.matmul(T_cameraOffset_cameraBefore, T_cameraInit_world)
 
+    '''
+    eventually delete the code below that we don't need
+    '''
     # Move testing data to GPU
     render_poses = torch.Tensor(render_poses).to(device)
 
