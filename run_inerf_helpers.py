@@ -1,8 +1,52 @@
 import numpy as np
+import torch
 
 '''
 From https://github.com/NxRLab/ModernRobotics/blob/master/packages/Python/modern_robotics/core.py
 '''
+
+def screwToMatrixExp4_torch(expc6):
+    axisang, theta = AxisAng6_torch(expc6)
+    omg, nu = axisang[:3], axisang[3:]
+    so3mat = vecToSo3_torch(omg)
+    exp3 = MatrixExp3_torch(so3mat * theta)
+    KStheta = (torch.eye(3)*theta + (1-torch.cos(theta))*so3mat + (theta-torch.sin(theta))*torch.mm(so3mat, so3mat))
+    KStheta = torch.mm(KStheta, torch.unsqueeze(nu,1))
+    expStheta = torch.Tensor(4,4)
+    expStheta[:3,:3] = exp3
+    expStheta[:3,3] = KStheta.squeeze()
+    expStheta[3,3] = 1
+    return expStheta
+
+def AxisAng6_torch(expc6):
+    """
+    Accepts a 6-vector expc6
+    Returns a (expc6, theta) 6-vector, scalar tuple
+    """
+    theta = torch.norm(expc6[:3])
+    return (expc6/theta, theta)
+
+def AxisAng3_torch(expc3):
+    theta = torch.norm(expc3)
+    return (expc3/theta, theta)
+
+def vecToSo3_torch(omg):
+    """
+    3-vector to so3 3x3 matrix
+    """
+    return torch.Tensor([[0,      -omg[2],  omg[1]],
+                     [omg[2],       0, -omg[0]],
+                     [-omg[1], omg[0],       0]])
+
+def so3ToVec_torch(so3mat):
+    return torch.Tensor([so3mat[2][1], so3mat[0][2], so3mat[1][0]])
+
+def MatrixExp3_torch(so3mat):
+    omgtheta = so3ToVec_torch(so3mat)
+    theta = AxisAng3_torch(omgtheta)[1]
+    omgmat = so3mat / theta
+    return torch.eye(3) + torch.sin(theta)*omgmat + (1 - torch.cos(theta)) * torch.mm(omgmat,omgmat)
+    
 def NearZero(z):
     """Determines whether a scalar is small enough to be treated as zero
     :param z: A scalar input to check
@@ -13,7 +57,6 @@ def NearZero(z):
         True
     """
     return abs(z) < 1e-6
-
 
 def Normalize(V):
     """Normalizes a vector
@@ -26,6 +69,20 @@ def Normalize(V):
     """
     return V / np.linalg.norm(V)
 
+def VecToso3(omg):
+    """Converts a 3-vector to an so(3) representation
+    :param omg: A 3-vector
+    :return: The skew symmetric representation of omg
+    Example Input:
+        omg = np.array([1, 2, 3])
+    Output:
+        np.array([[ 0, -3,  2],
+                  [ 3,  0, -1],
+                  [-2,  1,  0]])
+    """
+    return np.array([[0,      -omg[2],  omg[1]],
+                     [omg[2],       0, -omg[0]],
+                     [-omg[1], omg[0],       0]])
 
 def so3ToVec(so3mat):
     """Converts an so(3) representation to a 3-vector
