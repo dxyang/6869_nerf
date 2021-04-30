@@ -12,36 +12,19 @@ def plot_transform(
     linelength: float = 0.1,
     linewidth: int = 5,
 ) -> None:
-    """Plot a transform in a given window
-    """
     orig = t[:3, 3].squeeze()
-    x = t[:3, 0].squeeze()
-    y = t[:3, 1].squeeze()
-    z = t[:3, 2].squeeze()
-    plot_frame(fig, orig, x, y, z, label, linelength=linelength, linewidth=linewidth)
+    xaxis = t[:3, 0].squeeze()
+    yaxis = t[:3, 1].squeeze()
+    zaxis = t[:3, 2].squeeze()
 
-def plot_frame(
-    fig: go.Figure,
-    orig: np.array,
-    xaxis: np.array,
-    yaxis: np.array,
-    zaxis: np.array,
-    label: str = "",
-    linelength: float = 0.1,
-    linewidth: int = 5,
-) -> None:
-    """Plot the coordinate frame, from the origin.
-
-    Args:
-    """
     plot_vector(
-        fig, orig.squeeze(), xaxis.squeeze(), "red", label=label, width=linewidth, linelength=linelength
+        fig, orig, xaxis, "red", label=label, width=linewidth, linelength=linelength
     )
     plot_vector(
-        fig, orig.squeeze(), yaxis.squeeze(), "green", label=label, width=linewidth, linelength=linelength
+        fig, orig, yaxis, "green", label=label, width=linewidth, linelength=linelength
     )
     plot_vector(
-        fig, orig.squeeze(), zaxis.squeeze(), "blue", label=label, width=linewidth, linelength=linelength
+        fig, orig, zaxis, "blue", label=label, width=linewidth, linelength=linelength
     )
 
 
@@ -54,19 +37,13 @@ def plot_vector(
     label: str = "",
     linelength: float = 0.1,
 ) -> None:
-    """Plot a vector on a set of 3D axes.
-
-    Args:
-    """
     p = p.squeeze()
-    v = p.squeeze()
+    v = v.squeeze()
 
-    # c = 30
     c = linelength
     v = c * v
     e = p + v  # compute the endpoint
 
-    # for easy referencing
     sx, sy, sz = tuple(p[:3])
     ex, ey, ez = tuple(e[:3])
 
@@ -79,37 +56,6 @@ def plot_vector(
             line={"width": width, "color": col},
             showlegend=False,
             name=label,
-        )
-    )
-
-
-def plot_segment(
-    fig: go.Figure,
-    start: np.array,
-    end: np.array,
-    start_color: str = "red",
-    end_color: str = "blue",
-    line_color: str = "green",
-    point_opacity: float = 0.25,
-    point_size: int = 2,
-    line_width: int = 2,
-):
-    sx, sy, sz = tuple(start.squeeze()[:3])
-    ex, ey, ez = tuple(end.squeeze()[:3])
-
-    fig.add_trace(
-        go.Scatter3d(
-            x=[sx, ex],
-            y=[sy, ey],
-            z=[sz, ez],
-            mode="lines+markers",
-            line={"width": line_width, "color": line_color},
-            marker={
-                "size": point_size,
-                "color": [start_color, end_color],
-                "opacity": point_opacity,
-            },
-            showlegend=False,
         )
     )
 
@@ -215,6 +161,6 @@ if __name__ == "__main__":
     scene = PlotlyScene(
         size=(600, 600), x_range=(-1, 1), y_range=(-1, 1), z_range=(-1, 1)
     )
+    plot_transform(scene.figure, np.eye(4), label="world origin")
     scene.plot_scene_to_html("test")
-    plot_transform(scene.figure, np.eye(4), label="world origin", linelength=0.5, linewidth=20)
     visualizer.plot_scene(scene, window_name="test")
