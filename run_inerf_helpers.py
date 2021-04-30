@@ -1,17 +1,29 @@
+'''
+Torch implementations adapted from the numpy implementations
+
+Numpy implementations from
+https://github.com/NxRLab/ModernRobotics/blob/master/packages/Python/modern_robotics/core.py
+'''
 import numpy as np
 import torch
 
 '''
-From https://github.com/NxRLab/ModernRobotics/blob/master/packages/Python/modern_robotics/core.py
+torch implementations
 '''
-
 def screwToMatrixExp4_torch(expc6):
+    # convert R6 to axis angle (w, v) and theta
     axisang, theta = AxisAng6_torch(expc6)
     omg, nu = axisang[:3], axisang[3:]
     so3mat = vecToSo3_torch(omg)
+
+    # calculate the rotation exp([w] * theta)
     exp3 = MatrixExp3_torch(so3mat * theta)
+
+    # calculate the translation K(S, theta)
     KStheta = (torch.eye(3)*theta + (1-torch.cos(theta))*so3mat + (theta-torch.sin(theta))*torch.mm(so3mat, so3mat))
     KStheta = torch.mm(KStheta, torch.unsqueeze(nu,1))
+
+    # exponential SE3 exp([S] * theta)
     expStheta = torch.Tensor(4,4)
     expStheta[:3,:3] = exp3
     expStheta[:3,3] = KStheta.squeeze()
@@ -46,7 +58,10 @@ def MatrixExp3_torch(so3mat):
     theta = AxisAng3_torch(omgtheta)[1]
     omgmat = so3mat / theta
     return torch.eye(3) + torch.sin(theta)*omgmat + (1 - torch.cos(theta)) * torch.mm(omgmat,omgmat)
-    
+
+'''
+numpy implementations
+'''
 def NearZero(z):
     """Determines whether a scalar is small enough to be treated as zero
     :param z: A scalar input to check
@@ -151,3 +166,44 @@ def AxisAng6(expc6):
     if NearZero(theta):
         theta = np.linalg.norm([expc6[3], expc6[4], expc6[5]])
     return (np.array(expc6 / theta), theta)
+
+# useful for check/asserts/sanity checks
+def DistanceToSO3(mat):
+    """Returns the Frobenius norm to describe the distance of mat from the
+    SO(3) manifold
+    :param mat: A 3x3 matrix
+    :return: A quantity describing the distance of mat from the SO(3)
+             manifold
+    Computes the distance from mat to the SO(3) manifold using the following
+    method:
+    If det(mat) <= 0, return a large number.
+    If det(mat) > 0, return norm(mat^T.mat - I).
+    Example Input:
+        mat = np.array([[ 1.0,  0.0,   0.0 ],
+                        [ 0.0,  0.1,  -0.95],
+                        [ 0.0,  1.0,   0.1 ]])
+    Output:
+        0.08835
+    """
+    if np.linalg.det(mat) > 0:
+        return np.linalg.norm(np.dot(np.array(mat).T, mat) - np.eye(3))
+    else:
+        return 1e+9
+
+def TestIfSO3(mat):
+    """Returns true if mat is close to or on the manifold SO(3)
+    :param mat: A 3x3 matrix
+    :return: True if mat is very close to or in SO(3), false otherwise
+    Computes the distance d from mat to the SO(3) manifold using the
+    following method:
+    If det(mat) <= 0, d = a large number.
+    If det(mat) > 0, d = norm(mat^T.mat - I).
+    If d is close to zero, return true. Otherwise, return false.
+    Example Input:
+        mat = np.array([[1.0, 0.0,  0.0 ],
+                        [0.0, 0.1, -0.95],
+                        [0.0, 1.0,  0.1 ]])
+    Output:
+        False
+    """
+    return abs(DistanceToSO3(mat)) < 1e-3
