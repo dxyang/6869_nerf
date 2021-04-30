@@ -9,10 +9,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
+import visdom
 
 import matplotlib.pyplot as plt
 
 from run_inerf_helpers import screwToMatrixExp4_torch, TestIfSO3
+
+# some viz tools
+from vis import VisdomVisualizer, PlotlyScene, plot_transform
 
 curr_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f"{curr_path}/nerf-pytorch")
@@ -384,7 +388,6 @@ def render_rays(ray_batch,
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
 
-#     raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
@@ -400,7 +403,6 @@ def render_rays(ray_batch,
         pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples + N_importance, 3]
 
         run_fn = network_fn if network_fine is None else network_fine
-#         raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
@@ -531,6 +533,10 @@ def config_parser():
     parser.add_argument("--i_video",   type=int, default=50000,
                         help='frequency of render_poses video saving')
 
+    # debug visualization
+    parser.add_argument("--dbg",   type=bool, default=False,
+                        help='debug plots and visualizations')
+
     return parser
 
 
@@ -544,6 +550,13 @@ def train():
     device = torch.device('cpu')
     if torch.cuda.is_available():
         device = torch.device('cuda')
+
+    if args.dbg:
+        vis = visdom.Visdom()
+        visualizer = VisdomVisualizer(vis, "inerf")
+        scene = PlotlyScene(
+            x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
+        )
 
     # Load data
     if args.dataset_type == 'llff':
@@ -645,7 +658,7 @@ def train():
     target = images[img_i]
     target = torch.from_numpy(target).float().to(device)
     pose = poses[img_i, :3,:4]
-    T_obj_world = poses[img_i, :4,:4]
+    T_camera_world = poses[img_i, :4,:4]
 
     # TODO: better init but let's just use this arbitary offset from where we started
     theta = np.pi / 10
@@ -656,8 +669,15 @@ def train():
         [0, 0, 1.0, translation[2]],
         [0, 0, 0, 1.0]
     ])
-    T_cameraInit_world = np.matmul(T_offset_original, T_obj_world).astype(float)
-    T_cameraInit_world = torch.from_numpy(T_cameraInit_world).float().to(device)
+    T_cameraHatInit_world = np.matmul(T_offset_original, T_camera_world).astype(float)
+    T_cameraHatInit_world = torch.from_numpy(T_cameraHatInit_world).float().to(device)
+
+    if args.dbg:
+        plot_transform(scene.figure, T_camera_world, "T_camera_world", linelength=0.5, linewidth=10)
+        plot_transform(scene.figure, T_cameraHatInit_world.cpu().numpy(), "T_cameraHatInit_world", linelength=0.5, linewidth=10)
+        visualizer.plot_scene(scene, "scene")
+
+    import pdb; pdb.set_trace()
 
     '''
     we go from our R6 parameterization of an offset to an SE3 transform
