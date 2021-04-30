@@ -1,4 +1,4 @@
-expname = test_lego
+expname = lego_test
 basedir = ./nerf-pytorch/logs
 datadir = ./nerf-pytorch/data/nerf_synthetic/lego
 dataset_type = blender

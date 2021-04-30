@@ -221,7 +221,6 @@ def create_nerf(args):
         ckpts = [args.ft_path]
     else:
         ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
-
     print('Found ckpts', ckpts)
     if len(ckpts) > 0 and not args.no_reload:
         ckpt_path = ckpts[-1]
@@ -649,11 +648,12 @@ def train():
     T_obj_world = poses[img_i, :4,:4]
 
     # TODO: better init but let's just use this arbitary offset from where we started
-    theta = np.pi / 6
+    theta = np.pi / 10
+    translation = np.zeros((3)) #np.array([0.05, -0.05, 0.1])
     T_offset_original = np.array([
-        [np.cos(theta), -np.sin(theta), 0, 0.05],
-        [np.sin(theta), np.cos(theta), 0, -0.05],
-        [0, 0, 1.0, 0.1],
+        [np.cos(theta), -np.sin(theta), 0, translation[0]],
+        [np.sin(theta), np.cos(theta), 0, translation[1]],
+        [0, 0, 1.0, translation[2]],
         [0, 0, 0, 1.0]
     ])
     T_cameraInit_world = np.matmul(T_offset_original, T_obj_world).astype(float)
@@ -680,7 +680,7 @@ def train():
     '''
     N_rand = 1024
     global_step = 0
-    num_steps = 100
+    num_steps = 300
     while global_step < num_steps:
         # convert to se4
         T_offsetCamera_oldCamera = screwToMatrixExp4_torch(screw_exp)
@@ -730,10 +730,9 @@ def train():
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
 
+        # print(screw_exp)
+        print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}")
         global_step += 1
-
-        print(screw_exp)
-        print(loss)
 
 
 if __name__=='__main__':
