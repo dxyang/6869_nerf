@@ -32,7 +32,7 @@ def plot_vector(
     fig: go.Figure,
     p: np.array,
     v: np.array,
-    col: str,
+    color: str,
     width: int = 5,
     label: str = "",
     linelength: float = 0.1,
@@ -53,7 +53,7 @@ def plot_vector(
             y=[sy, ey],
             z=[sz, ez],
             mode="lines",
-            line={"width": width, "color": col},
+            line={"width": width, "color": color},
             showlegend=False,
             name=label,
         )
@@ -69,27 +69,17 @@ def plot_points(
     hovertext: Optional[List[str]] = None,
     name: Optional[str] = None,
 ) -> None:
-    """Plot a list of points, with the possibility of subsampling them.
-
-    Args:
-        points: List of points.
-        ax: Axes on which to plot.
-        title_text: Title text for the plot.
-        view_init: Initialize the view in 3D?
-        max_count: Maximum number of points to plot.
-    """
-
-    newx, newy, newz = points[0], points[1], points[2]
+    xs, ys, zs = points[0], points[1], points[2]
 
     fig.add_trace(
         go.Scatter3d(
-            x=newx,
-            y=newy,
-            z=newz,
+            x=xs,
+            y=ys,
+            z=zs,
             mode="markers",
             marker={
                 "size": size,
-                "color": color,  # set color to an array/list of desired values
+                "color": color,
                 "opacity": alpha,
             },
             name=name,
