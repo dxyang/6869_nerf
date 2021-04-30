@@ -127,7 +127,7 @@ class VisdomVisualizer():
         self.env = env
 
     def plot_rgb(self, rgb_hwc: np.array, window_name: str):
-        self.vis.image(rgb.transpose((2, 0, 1)), win=window_name, env=self.env)
+        self.vis.image(rgb_hwc.transpose((2, 0, 1)), win=window_name, env=self.env)
 
     def plot_depth(self, depth: np.array, window_name: str):
         depth_normalized = depth.squeeze() / np.max(depth) * 255

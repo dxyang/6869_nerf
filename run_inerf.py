@@ -1,5 +1,6 @@
 import os, sys
 import numpy as np
+import cv2
 import imageio
 import json
 import random
@@ -536,6 +537,9 @@ def config_parser():
     # debug visualization
     parser.add_argument("--dbg",   type=bool, default=False,
                         help='debug plots and visualizations')
+    # how to sample rays
+    parser.add_argument("--sample_rays", type=str, default="random",
+                        help='how to sample rays')
 
     return parser
 
@@ -676,8 +680,7 @@ def train():
         plot_transform(scene.figure, T_camera_world, "T_camera_world", linelength=0.5, linewidth=10)
         plot_transform(scene.figure, T_cameraHatInit_world.cpu().numpy(), "T_cameraHatInit_world", linelength=0.5, linewidth=10)
         visualizer.plot_scene(scene, "scene")
-
-    import pdb; pdb.set_trace()
+        visualizer.plot_rgb(target.cpu().numpy(), "target")
 
     '''
     we go from our R6 parameterization of an offset to an SE3 transform
@@ -698,7 +701,7 @@ def train():
     '''
     ~ main optimization loop ~
     '''
-    N_rand = 1024
+    N_rand = 1024 + 128
     global_step = 0
     num_steps = 300
     while global_step < num_steps:
@@ -707,7 +710,7 @@ def train():
         assert(TestIfSO3(T_offsetCamera_oldCamera.cpu().detach().numpy()[:3, :3])) # sanity check
 
         # apply updated camera pose to original camera pose
-        T_newCamera_world = torch.mm(T_offsetCamera_oldCamera, T_cameraInit_world)
+        T_newCameraHat_world = torch.mm(T_offsetCamera_oldCamera, T_cameraHatInit_world)
 
         '''
         sampling rays
@@ -716,13 +719,48 @@ def train():
         c) interest region
         '''
         # generate all the rays through all the pixels
-        rays_o, rays_d = get_rays(H, W, focal, T_newCamera_world[:3, :4]) # (H, W, 3), (H, W, 3)
+        rays_o, rays_d = get_rays(H, W, focal, T_newCameraHat_world[:3, :4]) # (H, W, 3), (H, W, 3)
 
-        # randomly sample N_rand rays from all HxW possibilities
-        coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
-        coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
-        select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
-        select_coords = coords[select_inds].long()  # (N_rand, 2)
+        if args.sample_rays == "random":
+            # randomly sample N_rand rays from all HxW possibilities
+            coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+            coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
+            select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+            select_coords = coords[select_inds].long()  # (N_rand, 2)
+        elif args.sample_rays == "feature_points":
+            # use orb features to pick keypoints
+            margin = 20
+            orb = cv2.ORB_create(
+                nfeatures=int(N_rand * 2),       # max number of features to retain
+                edgeThreshold=margin,            # size of border where features are not detected
+                patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+            )
+            target_with_orb_features = np.copy(target.cpu().numpy()) * 255
+            kps = orb.detect(target_with_orb_features,None)
+            random.shuffle(kps)
+            select_coords = torch.zeros(N_rand, 2).long()
+
+            if len(kps) < N_rand:
+                print(f"less keypoints ({len(kps)}) than N_rand ({N_rand})")
+                # randomly sample N_rand rays from all HxW possibilities
+                coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+                coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
+                select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+                select_coords = coords[select_inds].long()  # (N_rand, 2)
+
+            for i in range(min(len(kps), N_rand)):
+                x = int(kps[i].pt[0])
+                y = int(kps[i].pt[1])
+                select_coords[i, 0] = y
+                select_coords[i, 1] = x
+                cv2.circle(target_with_orb_features,(x,y), 5, (255, 0, 0), thickness=1)
+
+            if args.dbg:
+                visualizer.plot_rgb(target_with_orb_features, "target_with_orb_features")
+
+        else:
+            assert(False) # define a way to sample rays
+
         rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
         rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
         batch_rays = torch.stack([rays_o, rays_d], 0)
@@ -734,6 +772,15 @@ def train():
         rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
                                                 retraw=True,
                                                 **render_kwargs_test)
+
+        # plot the points we are visualizing
+        rendered_rays = np.zeros_like(target.cpu().numpy())
+        rgb_0_255 = rgb.detach().cpu().numpy() * 255
+        rgb_0_255 = rgb_0_255.astype(np.uint8)
+        rendered_rays[select_coords[:, 0].cpu().numpy(), select_coords[:, 1].cpu().numpy()] = rgb_0_255
+
+        if args.dbg:
+            visualizer.plot_rgb(rendered_rays, "rendered")
 
         optimizer.zero_grad()
         img_loss = img2mse(rgb, target_s)
@@ -750,7 +797,15 @@ def train():
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
 
-        # print(screw_exp)
+
+        if args.dbg:
+            scene = PlotlyScene(
+                x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
+            )
+            plot_transform(scene.figure, T_camera_world, "T_camera_world", linelength=0.5, linewidth=10)
+            plot_transform(scene.figure, T_newCameraHat_world.detach().cpu().numpy(), "T_newCameraHat_world", linelength=0.5, linewidth=10)
+            visualizer.plot_scene(scene, "scene")
+
         print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}")
         global_step += 1
 
