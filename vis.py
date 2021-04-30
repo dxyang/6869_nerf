@@ -1,0 +1,220 @@
+from typing import Collection, List, Optional, Tuple, Union, Dict
+
+import matplotlib
+import numpy as np
+import plotly.graph_objects as go
+import visdom
+
+def plot_transform(
+    fig: go.Figure,
+    t: np.array, # 3x4 or 4x4 matrix
+    label: str = "",
+    linelength: float = 0.1,
+    linewidth: int = 5,
+) -> None:
+    """Plot a transform in a given window
+    """
+    orig = t[:3, 3].squeeze()
+    x = t[:3, 0].squeeze()
+    y = t[:3, 1].squeeze()
+    z = t[:3, 2].squeeze()
+    plot_frame(fig, orig, x, y, z, label, linelength=linelength, linewidth=linewidth)
+
+def plot_frame(
+    fig: go.Figure,
+    orig: np.array,
+    xaxis: np.array,
+    yaxis: np.array,
+    zaxis: np.array,
+    label: str = "",
+    linelength: float = 0.1,
+    linewidth: int = 5,
+) -> None:
+    """Plot the coordinate frame, from the origin.
+
+    Args:
+    """
+    plot_vector(
+        fig, orig.squeeze(), xaxis.squeeze(), "red", label=label, width=linewidth, linelength=linelength
+    )
+    plot_vector(
+        fig, orig.squeeze(), yaxis.squeeze(), "green", label=label, width=linewidth, linelength=linelength
+    )
+    plot_vector(
+        fig, orig.squeeze(), zaxis.squeeze(), "blue", label=label, width=linewidth, linelength=linelength
+    )
+
+
+def plot_vector(
+    fig: go.Figure,
+    p: np.array,
+    v: np.array,
+    col: str,
+    width: int = 5,
+    label: str = "",
+    linelength: float = 0.1,
+) -> None:
+    """Plot a vector on a set of 3D axes.
+
+    Args:
+    """
+    p = p.squeeze()
+    v = p.squeeze()
+
+    # c = 30
+    c = linelength
+    v = c * v
+    e = p + v  # compute the endpoint
+
+    # for easy referencing
+    sx, sy, sz = tuple(p[:3])
+    ex, ey, ez = tuple(e[:3])
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=[sx, ex],
+            y=[sy, ey],
+            z=[sz, ez],
+            mode="lines",
+            line={"width": width, "color": col},
+            showlegend=False,
+            name=label,
+        )
+    )
+
+
+def plot_segment(
+    fig: go.Figure,
+    start: np.array,
+    end: np.array,
+    start_color: str = "red",
+    end_color: str = "blue",
+    line_color: str = "green",
+    point_opacity: float = 0.25,
+    point_size: int = 2,
+    line_width: int = 2,
+):
+    sx, sy, sz = tuple(start.squeeze()[:3])
+    ex, ey, ez = tuple(end.squeeze()[:3])
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=[sx, ex],
+            y=[sy, ey],
+            z=[sz, ez],
+            mode="lines+markers",
+            line={"width": line_width, "color": line_color},
+            marker={
+                "size": point_size,
+                "color": [start_color, end_color],
+                "opacity": point_opacity,
+            },
+            showlegend=False,
+        )
+    )
+
+
+def plot_points(
+    fig: go.Figure,
+    points: np.array, # 3 x N
+    color: str = "blue",
+    alpha: float = 1.0,
+    size: int = 5,
+    hovertext: Optional[List[str]] = None,
+    name: Optional[str] = None,
+) -> None:
+    """Plot a list of points, with the possibility of subsampling them.
+
+    Args:
+        points: List of points.
+        ax: Axes on which to plot.
+        title_text: Title text for the plot.
+        view_init: Initialize the view in 3D?
+        max_count: Maximum number of points to plot.
+    """
+
+    newx, newy, newz = points[0], points[1], points[2]
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=newx,
+            y=newy,
+            z=newz,
+            mode="markers",
+            marker={
+                "size": size,
+                "color": color,  # set color to an array/list of desired values
+                "opacity": alpha,
+            },
+            name=name,
+            hovertext=hovertext,
+        )
+    )
+
+
+class PlotlyScene():
+    def __init__(
+        self,
+        size: Tuple[int, int] = (500, 500),
+        x_range: Tuple[int, int] = (-1, 1),
+        y_range: Tuple[int, int] = (-1, 1),
+        z_range: Tuple[int, int] = (-1, 1),
+        show_legend: bool = False,
+        aspectmode: str = "cube",
+        aspectratio: Dict = None,
+    ):
+        # Construct a figure for the scene.
+        self.figure = go.Figure()
+
+        # Determine some parts of layout.
+        self.figure.update_layout(
+            autosize=False,
+            width=size[0],
+            height=size[1],
+            showlegend=show_legend,
+            margin=dict(l=0, r=0, t=0, b=0),
+            scene_aspectmode=aspectmode,
+            scene_aspectratio=aspectratio,
+            scene=dict(
+                xaxis=dict(nticks=4, range=x_range),
+                yaxis=dict(nticks=4, range=y_range),
+                zaxis=dict(nticks=4, range=z_range),
+            ),
+        )
+
+    def plot_scene_to_html(self, window_name: str):
+        self.figure.write_html(f"{window_name}.html", auto_open=True)
+
+class VisdomVisualizer():
+    def __init__(self, vis: visdom.Visdom, env: str):
+        self.vis = vis
+        self.env = env
+
+    def plot_rgb(self, rgb_hwc: np.array, window_name: str):
+        self.vis.image(rgb.transpose((2, 0, 1)), win=window_name, env=self.env)
+
+    def plot_depth(self, depth: np.array, window_name: str):
+        depth_normalized = depth.squeeze() / np.max(depth) * 255
+        self.vis.image(
+            depth_normalized.astype(np.uint8), win=window_name, env=self.env
+        )
+
+    def plot_mask(self, mask: np.array, window_name: str):
+        mask_0_255 = mask.squeeze() * 255
+        self.vis.image(
+            mask_0_255.astype(np.uint8), win=window_name, env=self.env
+        )
+
+    def plot_scene(self, scene: PlotlyScene, window_name: str):
+        self.vis.plotlyplot(scene.figure, win=window_name, env=self.env)
+
+if __name__ == "__main__":
+    vis = visdom.Visdom()
+
+    visualizer = VisdomVisualizer(vis, "main")
+    scene = PlotlyScene(
+        size=(600, 600), x_range=(-1, 1), y_range=(-1, 1), z_range=(-1, 1)
+    )
+    scene.plot_scene_to_html("test")
+    plot_transform(scene.figure, np.eye(4), label="world origin", linelength=0.5, linewidth=20)
+    visualizer.plot_scene(scene, window_name="test")

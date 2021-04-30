@@ -23,6 +23,8 @@ imageio = "^2.9.0"
 imageio-ffmpeg = "^0.4.3"
 torchsearchsorted = {path = "nerf-pytorch/torchsearchsorted"}
 ConfigArgParse = "^1.4"
+plotly = "^4.14.3"
+visdom = "^0.1.8"
 
 [tool.poetry.dev-dependencies]
 
