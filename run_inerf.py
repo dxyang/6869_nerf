@@ -729,16 +729,19 @@ def train():
             select_coords = coords[select_inds].long()  # (N_rand, 2)
         elif args.sample_rays == "feature_points":
             # use orb features to pick keypoints
-            margin = 20
+            margin = 30
             orb = cv2.ORB_create(
                 nfeatures=int(N_rand * 2),       # max number of features to retain
                 edgeThreshold=margin,            # size of border where features are not detected
                 patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
             )
             target_with_orb_features = np.copy(target.cpu().numpy()) * 255
-            kps = orb.detect(target_with_orb_features,None)
+
+            target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
+            kps = orb.detect(target_with_orb_features_opencv,None)
             random.shuffle(kps)
             select_coords = torch.zeros(N_rand, 2).long()
+            cv2.imwrite('color_img.jpg', target_with_orb_features_opencv)
 
             if len(kps) < N_rand:
                 print(f"less keypoints ({len(kps)}) than N_rand ({N_rand})")
@@ -753,10 +756,11 @@ def train():
                 y = int(kps[i].pt[1])
                 select_coords[i, 0] = y
                 select_coords[i, 1] = x
-                cv2.circle(target_with_orb_features,(x,y), 5, (255, 0, 0), thickness=1)
+                cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
 
             if args.dbg:
-                visualizer.plot_rgb(target_with_orb_features, "target_with_orb_features")
+                vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
+                visualizer.plot_rgb(vis_img, "target_with_orb_features")
 
         else:
             assert(False) # define a way to sample rays
