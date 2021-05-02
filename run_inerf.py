@@ -701,7 +701,7 @@ def train():
     '''
     ~ main optimization loop ~
     '''
-    N_rand = 1024 + 128
+    N_rand = 512#1024 + 128
     global_step = 0
     num_steps = 300
     while global_step < num_steps:
@@ -739,6 +739,7 @@ def train():
 
             target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
             kps = orb.detect(target_with_orb_features_opencv,None)
+
             random.shuffle(kps)
             select_coords = torch.zeros(N_rand, 2).long()
             cv2.imwrite('color_img.jpg', target_with_orb_features_opencv)
@@ -761,7 +762,43 @@ def train():
             if args.dbg:
                 vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
                 visualizer.plot_rgb(vis_img, "target_with_orb_features")
+                
+        elif args.sample_rays == "feature_regions":
+            # use orb features to pick keypoints
+            margin = 30
+            orb = cv2.ORB_create(
+                nfeatures=int(N_rand*2),       # max number of features to retain
+                edgeThreshold=margin,            # size of border where features are not detected
+                patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+            )
+            target_with_orb_features = np.copy(target.cpu().numpy()) * 255
+            target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
+            kps = orb.detect(target_with_orb_features_opencv,None)
+            
+            I = 3
+            kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
+            
+            tmp = np.zeros((H, W)).astype("uint8")
 
+            for i,j in kps_ij:
+                tmp[i,j] = 255
+            kern = np.ones((5,5))
+            for i in range(I):
+                tmp = cv2.dilate(tmp, kern)
+
+            d_kps_ij = np.argwhere(tmp > 0)
+            np.random.shuffle(d_kps_ij)
+
+            select_coords = torch.from_numpy(d_kps_ij[0:N_rand])
+
+            for i in range(N_rand):
+                y,x = kps_ij[i]
+                cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+            
+            if args.dbg:
+                #target_with_orb_features_opencv[tmp>1,2] = 255
+                visualizer.plot_rgb(target_with_orb_features_opencv,"target_with_regions")
+                visualizer.plot_rgb(cv2.cvtColor(tmp, cv2.COLOR_GRAY2RGB),"target_with_regions2")
         else:
             assert(False) # define a way to sample rays
 
