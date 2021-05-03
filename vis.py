@@ -91,7 +91,7 @@ def plot_points(
 class PlotlyScene():
     def __init__(
         self,
-        size: Tuple[int, int] = (500, 500),
+        size: Tuple[int, int] = (800, 800),
         x_range: Tuple[int, int] = (-1, 1),
         y_range: Tuple[int, int] = (-1, 1),
         z_range: Tuple[int, int] = (-1, 1),

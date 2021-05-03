@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from run_inerf_helpers import screwToMatrixExp4_torch, TestIfSO3
 
 # some viz tools
+from utils import sample_unit_sphere, rotation_matrix_from_axis_angle
 from vis import VisdomVisualizer, PlotlyScene, plot_transform
 
 curr_path = os.path.dirname(os.path.abspath(__file__))
@@ -663,18 +664,28 @@ def train():
     target = torch.from_numpy(target).float().to(device)
     pose = poses[img_i, :3,:4]
     T_camera_world = poses[img_i, :4,:4]
+    print(f"Image: {img_i}")
+    print(f"GT camera pose: {pose}")
 
-    # TODO: better init but let's just use this arbitary offset from where we started
-    theta = np.pi / 10
-    translation = np.zeros((3)) #np.array([0.05, -0.05, 0.1])
-    T_offset_original = np.array([
-        [np.cos(theta), -np.sin(theta), 0, translation[0]],
-        [np.sin(theta), np.cos(theta), 0, translation[1]],
-        [0, 0, 1.0, translation[2]],
-        [0, 0, 0, 1.0]
-    ])
+    # random init as described in the paper
+    random_axis = sample_unit_sphere()
+    random_angle = (np.random.rand() - 0.5) * 2 * 40 # random [-40, 40 degrees]
+    random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle * np.pi / 180.0)
+    random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters #np.array([0.05, -0.05, 0.1])
+    # theta = np.pi / 10
+    # T_offset_original = np.array([
+    #     [np.cos(theta), -np.sin(theta), 0, random_translation[0]],
+    #     [np.sin(theta), np.cos(theta), 0, random_translation[1]],
+    #     [0, 0, 1.0, random_translation[2]],
+    #     [0, 0, 0, 1.0]
+    # ])
+    # print(f"random offset: translation: {random_translation}, rotation: {theta} around z")
+    T_offset_original = np.eye(4)
+    T_offset_original[:3, :3] = random_rot_mat3
+    T_offset_original[:3, 3] = random_translation
     T_cameraHatInit_world = np.matmul(T_offset_original, T_camera_world).astype(float)
     T_cameraHatInit_world = torch.from_numpy(T_cameraHatInit_world).float().to(device)
+    print(f"offset: t: {random_translation}, rot: {random_angle} degrees around {random_axis}")
 
     if args.dbg:
         plot_transform(scene.figure, T_camera_world, "T_camera_world", linelength=0.5, linewidth=10)
@@ -701,7 +712,7 @@ def train():
     '''
     ~ main optimization loop ~
     '''
-    N_rand = 512#1024 + 128
+    N_rand = 1024 + 128
     global_step = 0
     num_steps = 300
     while global_step < num_steps:
@@ -762,7 +773,7 @@ def train():
             if args.dbg:
                 vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
                 visualizer.plot_rgb(vis_img, "target_with_orb_features")
-                
+
         elif args.sample_rays == "feature_regions":
             # use orb features to pick keypoints
             margin = 30
@@ -774,10 +785,10 @@ def train():
             target_with_orb_features = np.copy(target.cpu().numpy()) * 255
             target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
             kps = orb.detect(target_with_orb_features_opencv,None)
-            
+
             I = 3
             kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
-            
+
             tmp = np.zeros((H, W)).astype("uint8")
 
             for i,j in kps_ij:
@@ -794,10 +805,11 @@ def train():
             for i in range(N_rand):
                 y,x = kps_ij[i]
                 cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
-            
+
             if args.dbg:
                 #target_with_orb_features_opencv[tmp>1,2] = 255
-                visualizer.plot_rgb(target_with_orb_features_opencv,"target_with_regions")
+                vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
+                visualizer.plot_rgb(vis_img,"target_with_regions")
                 visualizer.plot_rgb(cv2.cvtColor(tmp, cv2.COLOR_GRAY2RGB),"target_with_regions2")
         else:
             assert(False) # define a way to sample rays
@@ -839,7 +851,7 @@ def train():
             param_group['lr'] = new_lrate
 
 
-        if args.dbg:
+        if args.dbg and global_step % 10 == 0:
             scene = PlotlyScene(
                 x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
             )
@@ -847,7 +859,11 @@ def train():
             plot_transform(scene.figure, T_newCameraHat_world.detach().cpu().numpy(), "T_newCameraHat_world", linelength=0.5, linewidth=10)
             visualizer.plot_scene(scene, "scene")
 
-        print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}")
+        if global_step % 10 == 0:
+            trans_hat = T_newCameraHat_world.detach().cpu().numpy()[:3, 3]
+            trans = T_camera_world[:3, 3]
+            trans_error = np.linalg.norm(trans_hat - trans)
+            print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, translation error: {trans_error} m")
         global_step += 1
 
 
