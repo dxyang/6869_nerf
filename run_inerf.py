@@ -559,9 +559,6 @@ def train():
     if args.dbg:
         vis = visdom.Visdom()
         visualizer = VisdomVisualizer(vis, "inerf")
-        scene = PlotlyScene(
-            x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
-        )
 
     # Load data
     if args.dataset_type == 'llff':
@@ -663,35 +660,46 @@ def train():
     target = images[img_i]
     target = torch.from_numpy(target).float().to(device)
     pose = poses[img_i, :3,:4]
-    T_camera_world = poses[img_i, :4,:4]
+    T_world_camera = poses[img_i, :4,:4] # camera pose in world frame
+    
     print(f"Image: {img_i}")
     print(f"GT camera pose: {pose}")
 
-    # random init as described in the paper
+    # random init 
     random_axis = sample_unit_sphere()
-    random_angle = (np.random.rand() - 0.5) * 2 * 40 # random [-40, 40 degrees]
-    random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle * np.pi / 180.0)
-    random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters #np.array([0.05, -0.05, 0.1])
-    # theta = np.pi / 10
-    # T_offset_original = np.array([
-    #     [np.cos(theta), -np.sin(theta), 0, random_translation[0]],
-    #     [np.sin(theta), np.cos(theta), 0, random_translation[1]],
-    #     [0, 0, 1.0, random_translation[2]],
-    #     [0, 0, 0, 1.0]
-    # ])
-    # print(f"random offset: translation: {random_translation}, rotation: {theta} around z")
-    T_offset_original = np.eye(4)
-    T_offset_original[:3, :3] = random_rot_mat3
-    T_offset_original[:3, 3] = random_translation
-    T_cameraHatInit_world = np.matmul(T_offset_original, T_camera_world).astype(float)
-    T_cameraHatInit_world = torch.from_numpy(T_cameraHatInit_world).float().to(device)
-    print(f"offset: t: {random_translation}, rot: {random_angle} degrees around {random_axis}")
+    random_angle_rads = np.pi / 180 * 0 # 15
+    # random_translation = np.zeros((3)) 
+    # random_angle_rads = (np.random.rand() - 0.5) * 2 * 20 * np.pi / 180 # random [-20, 20 degrees]
+    # random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters 
+    random_translation = np.array([random.uniform(-0.2, 0.2) for _ in range(3)]) # random [-0.2, 0.2] meters 
+    random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle_rads)
+
+    T_original_offset = np.eye(4)
+    T_original_offset[:3, :3] = random_rot_mat3
+    T_original_offset[:3, 3] = random_translation
+    T_world_cameraInit = np.matmul(T_world_camera, T_original_offset).astype(float)
+    T_world_cameraInit = torch.from_numpy(T_world_cameraInit).float().to(device)
+    print(f"offset: t: {random_translation}, rot: {random_angle_rads * 180 / np.pi} degrees around {random_axis}")
+    print(f"T_world_cameraInit: \n{T_world_cameraInit}")
 
     if args.dbg:
-        plot_transform(scene.figure, T_camera_world, "T_camera_world", linelength=0.5, linewidth=10)
-        plot_transform(scene.figure, T_cameraHatInit_world.cpu().numpy(), "T_cameraHatInit_world", linelength=0.5, linewidth=10)
-        visualizer.plot_scene(scene, "scene")
+        T_camera_world = np.linalg.inv(T_world_camera)
+        T_cameraInit_world = np.linalg.inv(T_world_cameraInit.cpu().numpy())
+    
+        initial_scene = PlotlyScene(
+            x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
+        )
+        plot_transform(initial_scene.figure, np.eye(4), "cam frame", linelength=0.5, linewidth=10)
+        plot_transform(initial_scene.figure, T_world_cameraInit.cpu().numpy(), "T_world_camInit", linelength=0.5, linewidth=10)
+        plot_transform(initial_scene.figure, T_world_camera, "T_world_cam", linelength=0.5, linewidth=10)
+
+        visualizer.plot_scene(initial_scene, "initial")
         visualizer.plot_rgb(target.cpu().numpy(), "target")
+
+        with torch.no_grad():
+            rgbs, _ = render_path(torch.unsqueeze(T_world_cameraInit, 0), hwf, args.chunk, render_kwargs_test)
+        rgb = rgbs[0]
+        visualizer.plot_rgb((rgb * 255).astype(np.uint8), "target_hat")
 
     '''
     we go from our R6 parameterization of an offset to an SE3 transform
@@ -712,16 +720,17 @@ def train():
     '''
     ~ main optimization loop ~
     '''
-    N_rand = 1024 + 128
+    N_rand = 1024
     global_step = 0
     num_steps = 300
     while global_step < num_steps:
         # convert to se4
-        T_offsetCamera_oldCamera = screwToMatrixExp4_torch(screw_exp)
-        assert(TestIfSO3(T_offsetCamera_oldCamera.cpu().detach().numpy()[:3, :3])) # sanity check
+        T_newWorld_oldWorld = screwToMatrixExp4_torch(screw_exp)
+        assert(TestIfSO3(T_newWorld_oldWorld.cpu().detach().numpy()[:3, :3])) # sanity check
 
-        # apply updated camera pose to original camera pose
-        T_newCameraHat_world = torch.mm(T_offsetCamera_oldCamera, T_cameraHatInit_world)
+        # premultiply our estimate as specified in the paper
+        T_world_cameraHat = torch.mm(T_newWorld_oldWorld, T_world_cameraInit)
+        # print(f"T_world_cameraHat: \n{T_world_cameraHat}")
 
         '''
         sampling rays
@@ -730,7 +739,7 @@ def train():
         c) interest region
         '''
         # generate all the rays through all the pixels
-        rays_o, rays_d = get_rays(H, W, focal, T_newCameraHat_world[:3, :4]) # (H, W, 3), (H, W, 3)
+        rays_o, rays_d = get_rays(H, W, focal, T_world_cameraHat[:3, :4]) # (H, W, 3), (H, W, 3)
 
         if args.sample_rays == "random":
             # randomly sample N_rand rays from all HxW possibilities
@@ -851,19 +860,45 @@ def train():
             param_group['lr'] = new_lrate
 
 
-        if args.dbg and global_step % 10 == 0:
-            scene = PlotlyScene(
-                x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
-            )
-            plot_transform(scene.figure, T_camera_world, "T_camera_world", linelength=0.5, linewidth=10)
-            plot_transform(scene.figure, T_newCameraHat_world.detach().cpu().numpy(), "T_newCameraHat_world", linelength=0.5, linewidth=10)
-            visualizer.plot_scene(scene, "scene")
-
         if global_step % 10 == 0:
-            trans_hat = T_newCameraHat_world.detach().cpu().numpy()[:3, 3]
-            trans = T_camera_world[:3, 3]
+            # current camera pose
+            T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
+
+            # check translation error
+            trans_hat = T_world_cameraHat_np[:3, 3]
+            trans = T_world_camera[:3, 3]
             trans_error = np.linalg.norm(trans_hat - trans)
             print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, translation error: {trans_error} m")
+
+        if args.dbg and global_step % 10 == 0:
+            # current camera pose
+            T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
+            T_world_cameraHats = torch.from_numpy(np.expand_dims(T_world_cameraHat_np, 0)).to(device)
+
+            optimization_scene = PlotlyScene(
+                x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
+            )
+            plot_transform(optimization_scene.figure, np.eye(4), "camera frame", linelength=0.5, linewidth=10)
+            plot_transform(optimization_scene.figure, T_world_camera, "T_world_camera", linelength=0.5, linewidth=10)
+            plot_transform(optimization_scene.figure, T_world_cameraHat_np, "T_world_cameraHat", linelength=0.5, linewidth=10)
+            visualizer.plot_scene(optimization_scene, "optimization")
+
+            # clear gpu cuda ram since forward pass takes up some vram
+            # if global_step % 100 == 0:
+            #     del rgb
+            #     del disp
+            #     del acc
+            #     del extras
+            #     del loss
+            #     del img_loss
+            #     torch.cuda.empty_cache()
+
+            #     # render the whole image from the camera pose
+            #     with torch.no_grad():
+            #         rgbs, _ = render_path(T_world_cameraHats, hwf, args.chunk, render_kwargs_test)
+            #     rgb = rgbs[0]
+            #     visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
+
         global_step += 1
 
 
