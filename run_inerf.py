@@ -642,8 +642,7 @@ def train():
             file.write(open(args.config, 'r').read())
 
     # Create nerf model
-    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
-    global_step = start
+    render_kwargs_train, render_kwargs_test, _, _, _ = create_nerf(args)
 
     bds_dict = {
         'near' : near,
