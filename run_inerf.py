@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from run_inerf_helpers import screwToMatrixExp4_torch, TestIfSO3
 
 # some viz tools
-from utils import sample_unit_sphere, rotation_matrix_from_axis_angle
+from utils import check_pose_error, sample_unit_sphere, rotation_matrix_from_axis_angle
 from vis import VisdomVisualizer, PlotlyScene, plot_transform
 
 curr_path = os.path.dirname(os.path.abspath(__file__))
@@ -240,6 +240,8 @@ def create_nerf(args):
         model.load_state_dict(ckpt['network_fn_state_dict'])
         if model_fine is not None:
             model_fine.load_state_dict(ckpt['network_fine_state_dict'])
+            model_fine.eval()
+        model.eval()
 
     ##########################
 
@@ -536,8 +538,10 @@ def config_parser():
                         help='frequency of render_poses video saving')
 
     # debug visualization
-    parser.add_argument("--dbg",   type=bool, default=False,
+    parser.add_argument("--dbg",   action='store_true',
                         help='debug plots and visualizations')
+    parser.add_argument("--dbg_render_imgs", action='store_true',
+                        help='debug render imgs periodically')
     # how to sample rays
     parser.add_argument("--sample_rays", type=str, default="random",
                         help='how to sample rays')
@@ -660,31 +664,38 @@ def train():
     target = torch.from_numpy(target).float().to(device)
     pose = poses[img_i, :3,:4]
     T_world_camera = poses[img_i, :4,:4] # camera pose in world frame
-    
+
     print(f"Image: {img_i}")
     print(f"GT camera pose: {pose}")
 
-    # random init 
+    # random init
+    # random_axis = np.random.randn((3))
+    # random_axis = random_axis / np.linalg.norm(random_axis)
     random_axis = sample_unit_sphere()
-    random_angle_rads = np.pi / 180 * 0 # 15
-    # random_translation = np.zeros((3)) 
+    random_angle_rads = np.pi / 180 * 15
+    # random_translation = np.zeros((3))
     # random_angle_rads = (np.random.rand() - 0.5) * 2 * 20 * np.pi / 180 # random [-20, 20 degrees]
-    # random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters 
-    random_translation = np.array([random.uniform(-0.2, 0.2) for _ in range(3)]) # random [-0.2, 0.2] meters 
+    # random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters
+    # random_translation = np.array([random.uniform(-0.2, 0.2) for _ in range(3)]) # random [-0.2, 0.2] meters
+    random_translation = np.zeros(3)
     random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle_rads)
 
-    T_original_offset = np.eye(4)
-    T_original_offset[:3, :3] = random_rot_mat3
-    T_original_offset[:3, 3] = random_translation
-    T_world_cameraInit = np.matmul(T_world_camera, T_original_offset).astype(float)
+    T_rotated_original = np.eye(4)
+    T_rotated_original[:3, :3] = random_rot_mat3
+
+    T_translated_original = np.eye(4)
+    T_translated_original[:3, 3] = random_translation
+
+    T_offset_original = np.matmul(T_translated_original, T_rotated_original)
+
+    T_world_cameraInit = np.matmul(T_offset_original, T_world_camera).astype(float)
     T_world_cameraInit = torch.from_numpy(T_world_cameraInit).float().to(device)
     print(f"offset: t: {random_translation}, rot: {random_angle_rads * 180 / np.pi} degrees around {random_axis}")
-    print(f"T_world_cameraInit: \n{T_world_cameraInit}")
 
     if args.dbg:
         T_camera_world = np.linalg.inv(T_world_camera)
         T_cameraInit_world = np.linalg.inv(T_world_cameraInit.cpu().numpy())
-    
+
         initial_scene = PlotlyScene(
             x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
         )
@@ -695,10 +706,11 @@ def train():
         visualizer.plot_scene(initial_scene, "initial")
         visualizer.plot_rgb(target.cpu().numpy(), "target")
 
-        with torch.no_grad():
-            rgbs, _ = render_path(torch.unsqueeze(T_world_cameraInit, 0), hwf, args.chunk, render_kwargs_test)
-        rgb = rgbs[0]
-        visualizer.plot_rgb((rgb * 255).astype(np.uint8), "target_hat")
+        if args.dbg_render_imgs:
+            with torch.no_grad():
+                rgbs, _ = render_path(torch.unsqueeze(T_world_cameraInit, 0), hwf, args.chunk, render_kwargs_test)
+            rgb = rgbs[0]
+            visualizer.plot_rgb((rgb * 255).astype(np.uint8), "target_hat")
 
     '''
     we go from our R6 parameterization of an offset to an SE3 transform
@@ -707,6 +719,12 @@ def train():
     # sample a 6-vector of exponential coordinates
     screw_exp = torch.normal(mean=torch.zeros(6), std=1e-6 * torch.ones(6)).to(device)
     screw_exp.requires_grad = True
+
+    # sanity check the initial pose error
+    T_newWorld_oldWorld = screwToMatrixExp4_torch(screw_exp)
+    T_world_cameraHat = torch.mm(T_newWorld_oldWorld, T_world_cameraInit)
+    t_err, rot_err = check_pose_error(T_world_cameraHat.detach().cpu().numpy(), T_world_camera)
+    print(f"beginning: trans error: {t_err}, rot error: {rot_err}")
 
     '''
     optimizer
@@ -852,22 +870,22 @@ def train():
 
         ###   update learning rate   ###
         # The learning rate at step t is set as follow α_t = α_0 * 0.8^(t/100)
-        decay_rate = 0.8
+        decay_rate = 0.6
         decay_steps = 100
         new_lrate = initial_lr * (decay_rate ** (global_step / decay_steps))
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
 
-
+        '''
+        prints and visualizations
+        '''
         if global_step % 10 == 0:
             # current camera pose
             T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
 
-            # check translation error
-            trans_hat = T_world_cameraHat_np[:3, 3]
-            trans = T_world_camera[:3, 3]
-            trans_error = np.linalg.norm(trans_hat - trans)
-            print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, translation error: {trans_error} m")
+            # check pose error
+            t_err, rot_err = check_pose_error(T_world_cameraHat_np, T_world_camera)
+            print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}")
 
         if args.dbg and global_step % 10 == 0:
             # current camera pose
@@ -883,20 +901,21 @@ def train():
             visualizer.plot_scene(optimization_scene, "optimization")
 
             # clear gpu cuda ram since forward pass takes up some vram
-            # if global_step % 100 == 0:
-            #     del rgb
-            #     del disp
-            #     del acc
-            #     del extras
-            #     del loss
-            #     del img_loss
-            #     torch.cuda.empty_cache()
+            if args.dbg_render_imgs:
+                if global_step % 50 == 0:
+                    del rgb
+                    del disp
+                    del acc
+                    del extras
+                    del loss
+                    del img_loss
+                    torch.cuda.empty_cache()
 
-            #     # render the whole image from the camera pose
-            #     with torch.no_grad():
-            #         rgbs, _ = render_path(T_world_cameraHats, hwf, args.chunk, render_kwargs_test)
-            #     rgb = rgbs[0]
-            #     visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
+                    # render the whole image from the camera pose
+                    with torch.no_grad():
+                        rgbs, _ = render_path(T_world_cameraHats, hwf, args.chunk, render_kwargs_test)
+                    rgb = rgbs[0]
+                    visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
 
         global_step += 1
 

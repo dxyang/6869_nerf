@@ -1,7 +1,14 @@
 import math
 import numpy as np
 
-from run_inerf_helpers import TestIfSO3
+def check_pose_error(That_A_B: np.array, T_A_B: np.array):
+    T_Ahat_A = np.matmul(That_A_B, np.linalg.inv(T_A_B))
+    rotation_error = np.arccos(
+        (np.trace(T_Ahat_A[:3, :3]) - 1.0) / 2.0
+    ) * 180.0 / np.pi
+    translation_error = np.linalg.norm(T_Ahat_A[:3, 3])
+    return translation_error, rotation_error
+
 
 def sample_unit_sphere():
     # http://corysimon.github.io/articles/uniformdistn-on-sphere/
@@ -12,6 +19,7 @@ def sample_unit_sphere():
     z = math.cos(phi)
 
     return np.array([x, y, z])
+
 
 def quat_from_axis_angle(axis: np.array, angle_rads: float):
     # don't divide by zero
@@ -32,6 +40,7 @@ def quat_from_axis_angle(axis: np.array, angle_rads: float):
         normalized_axis[2] * sin_half_angle,
         math.cos(angle_rads * 0.5),
     ])
+
 
 def rotation_matrix_from_quat(q: np.array):
     q = q.squeeze() # xyzw
@@ -68,6 +77,7 @@ def rotation_matrix_from_quat(q: np.array):
 
     return mat3
 
+
 def is_rotation_matrix(mat3: np.array):
 
     if np.linalg.det(mat3) > 0:
@@ -76,6 +86,7 @@ def is_rotation_matrix(mat3: np.array):
         dist = 1e+9
 
     return abs(dist) <= 1e-3
+
 
 def rotation_matrix_from_axis_angle(axis: np.array, angle_rads: float):
     q = quat_from_axis_angle(axis, angle_rads)

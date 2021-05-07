@@ -20,3 +20,4 @@ half_res = True
 
 dbg = True
 sample_rays = feature_regions
+dbg_render_imgs = False

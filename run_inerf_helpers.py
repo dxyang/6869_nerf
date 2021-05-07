@@ -17,7 +17,8 @@ def screwToMatrixExp4_torch(expc6):
     so3mat = vecToSo3_torch(omg)
 
     # calculate the rotation exp([w] * theta)
-    exp3 = MatrixExp3_torch(so3mat * theta)
+    exp3 = MatrixExp3_torch_v2(omg, theta)
+    #exp3 = MatrixExp3_torch(so3mat * theta)
 
     # calculate the translation K(S, theta)
     KStheta = (torch.eye(3)*theta + (1-torch.cos(theta))*so3mat + (theta-torch.sin(theta))*torch.mm(so3mat, so3mat))
@@ -30,6 +31,7 @@ def screwToMatrixExp4_torch(expc6):
     expStheta[3,3] = 1
     return expStheta
 
+
 def AxisAng6_torch(expc6):
     """
     Accepts a 6-vector expc6
@@ -38,9 +40,11 @@ def AxisAng6_torch(expc6):
     theta = torch.norm(expc6[:3])
     return (expc6/theta, theta)
 
+
 def AxisAng3_torch(expc3):
     theta = torch.norm(expc3)
     return (expc3/theta, theta)
+
 
 def vecToSo3_torch(omg):
     """
@@ -50,14 +54,22 @@ def vecToSo3_torch(omg):
                      [omg[2],       0, -omg[0]],
                      [-omg[1], omg[0],       0]])
 
+
 def so3ToVec_torch(so3mat):
     return torch.Tensor([so3mat[2][1], so3mat[0][2], so3mat[1][0]])
+
+
+def MatrixExp3_torch_v2(omg, theta):
+    omgmat = vecToSo3_torch(omg)
+    return torch.eye(3) + torch.sin(theta)*omgmat + (1 - torch.cos(theta)) * torch.mm(omgmat,omgmat)
+
 
 def MatrixExp3_torch(so3mat):
     omgtheta = so3ToVec_torch(so3mat)
     theta = AxisAng3_torch(omgtheta)[1]
     omgmat = so3mat / theta
     return torch.eye(3) + torch.sin(theta)*omgmat + (1 - torch.cos(theta)) * torch.mm(omgmat,omgmat)
+
 
 '''
 numpy implementations
@@ -73,6 +85,7 @@ def NearZero(z):
     """
     return abs(z) < 1e-6
 
+
 def Normalize(V):
     """Normalizes a vector
     :param V: A vector
@@ -83,6 +96,7 @@ def Normalize(V):
         np.array([0.26726124, 0.53452248, 0.80178373])
     """
     return V / np.linalg.norm(V)
+
 
 def VecToso3(omg):
     """Converts a 3-vector to an so(3) representation
@@ -98,6 +112,7 @@ def VecToso3(omg):
     return np.array([[0,      -omg[2],  omg[1]],
                      [omg[2],       0, -omg[0]],
                      [-omg[1], omg[0],       0]])
+
 
 def so3ToVec(so3mat):
     """Converts an so(3) representation to a 3-vector
@@ -167,6 +182,7 @@ def AxisAng6(expc6):
         theta = np.linalg.norm([expc6[3], expc6[4], expc6[5]])
     return (np.array(expc6 / theta), theta)
 
+
 # useful for check/asserts/sanity checks
 def DistanceToSO3(mat):
     """Returns the Frobenius norm to describe the distance of mat from the
@@ -189,6 +205,7 @@ def DistanceToSO3(mat):
         return np.linalg.norm(np.dot(np.array(mat).T, mat) - np.eye(3))
     else:
         return 1e+9
+
 
 def TestIfSO3(mat):
     """Returns true if mat is close to or on the manifold SO(3)
