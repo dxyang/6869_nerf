@@ -49,6 +49,20 @@ class ImgPoseDataset(Dataset):
         pose = self.poses[idx]
         return (img, pose)
 
+def set_bn_grad_recursive(m, req_grad=True):
+    if isinstance(m, nn.BatchNorm2d):
+        m.requires_grad = req_grad
+        print(m)
+
+    for child in m.children():
+        set_bn_grad_recursive(child, req_grad)
+
+def set_grad_recursive(m, req_grad=True):
+    m.requires_grad = req_grad
+
+    for child in m.children():
+        set_grad_recursive(child, req_grad)
+        
 def config_parser():
 
     import configargparse
@@ -282,8 +296,11 @@ def train():
     regressor.to('cuda')
 
     # freeze the feature extractor?
-    for param in features.parameters():
-        param.requires_grad = False
+    #for param in features.parameters():
+    #    param.requires_grad = True
+    
+    set_grad_recursive(features, req_grad = False)
+    set_bn_grad_recursive(features, req_grad = True)
 
     for param in regressor.parameters():
         param.requires_grad = True
@@ -321,6 +338,7 @@ def train():
         running_loss = 0.0
         running_trans_loss = 0.0
         for inputs, pose in tqdm(train_loader):
+            optimizer.zero_grad()
             inputs = inputs.to(device)
             gt_pose = pose.to(device)
             output = features(inputs)
