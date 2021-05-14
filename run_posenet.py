@@ -283,7 +283,7 @@ def train():
 
     # freeze the feature extractor?
     for param in features.parameters():
-        param.requires_grad = True
+        param.requires_grad = False
 
     for param in regressor.parameters():
         param.requires_grad = True
@@ -309,12 +309,12 @@ def train():
     test_dataset = ImgPoseDataset(test_images, test_poses)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    optimizer = torch.optim.Adam(params=list(features.parameters())+list(regressor.parameters()), lr=1e-4)
+    #optimizer = torch.optim.Adam(params=list(features.parameters())+list(regressor.parameters()), lr=1e-4)
+    optimizer = torch.optim.Adam(params=regressor.parameters(), lr=1e-4)
 
     num_epochs = 4000
 
-    print(mobilev2)
-    
+    features.eval()
     regressor.train()
     for epoch in range(num_epochs):
 
