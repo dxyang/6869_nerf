@@ -29,7 +29,6 @@ from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
 
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
 DEBUG = False
@@ -208,6 +207,10 @@ def train():
         near = 2.
         far = 6.
 
+        disps = images[...,3]
+        print("disps_max",np.max(disps))
+        print("disps_min",np.min(disps))
+        
         if args.white_bkgd:
             images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
         else:
@@ -269,12 +272,22 @@ def train():
     img_i = np.random.choice(i_train)
     target = images[img_i]
     target = torch.from_numpy(target).float().to(device)
+
     pose = poses[img_i, :3,:4]
     T_world_camera = poses[img_i, :4,:4] # camera pose in world frame
 
     print(f"Image: {img_i}")
     print(f"GT camera pose: {pose}")
 
+    with torch.no_grad():
+        rgbs_rgt, disps_rgt = render_path(torch.from_numpy(np.expand_dims(T_world_camera[:3, :4],0)).float().to(device), hwf, args.chunk, render_kwargs_test)
+
+    rgb_rgt = rgbs_rgt[0]
+    disp_rgt = disps_rgt[0]
+    visualizer.plot_rgb((rgb_rgt * 255).astype(np.uint8), "rgb_rgt")
+    visualizer.plot_rgb(cv2.cvtColor((np.copy(disp_rgt)*255).astype("float32"), cv2.COLOR_GRAY2RGB),"disparity")
+    target_disp = torch.from_numpy(disp_rgt).float().to(device)
+    
     # random init
     t_rng = 0.5
     r_rng = 10
@@ -282,7 +295,7 @@ def train():
     # random_axis = np.random.randn((3))
     # random_axis = random_axis / np.linalg.norm(random_axis)
     random_axis = sample_unit_sphere()
-    random_angle_rads = np.deg2rad(r_rng)
+    random_angle_rads = np.deg2rad(np.random.uniform(-r_rng,r_rng))
     # random_translation = np.zeros((3))
     # random_angle_rads = (np.random.rand() - 0.5) * 2 * 20 * np.pi / 180 # random [-20, 20 degrees]
     # random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters
@@ -454,13 +467,13 @@ def train():
         rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
         batch_rays = torch.stack([rays_o, rays_d], 0)
         target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-
+        disp_s = target_disp[select_coords[:, 0], select_coords[:, 1]]
         '''
         render and compare
         '''
         rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
-                                                retraw=True,
-                                                **render_kwargs_test)
+                                        retraw=True,
+                                        **render_kwargs_test)
 
         # plot the points we are visualizing
         rendered_rays = np.zeros_like(target.cpu().numpy())
@@ -472,6 +485,9 @@ def train():
             visualizer.plot_rgb(rendered_rays, "rendered")
 
         optimizer.zero_grad()
+
+        target_s = torch.cat((target_s, disp_s.unsqueeze(1)), 1) # is this correct to include depth like this?
+        rgb = torch.cat((rgb, disp.unsqueeze(1)), 1)
         img_loss = img2mse(rgb, target_s)
         loss = img_loss
 
