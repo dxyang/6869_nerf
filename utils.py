@@ -4,7 +4,11 @@ import numpy as np
 def check_pose_error(That_A_B: np.array, T_A_B: np.array):
     T_Ahat_A = np.matmul(That_A_B, np.linalg.inv(T_A_B))
     rotation_error = np.arccos(
-        (np.trace(T_Ahat_A[:3, :3]) - 1.0) / 2.0
+        np.clip(
+            (np.trace(T_Ahat_A[:3, :3]) - 1.0) / 2.0,
+            -1.0,
+            1.0
+        )
     ) * 180.0 / np.pi
     translation_error = np.linalg.norm(T_Ahat_A[:3, 3])
     return translation_error, rotation_error
