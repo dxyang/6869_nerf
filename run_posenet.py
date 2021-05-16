@@ -290,7 +290,8 @@ def train():
         
     #model_cut = nn.Sequential(*list(mobilev2.children())[:-1],nn.Sequential(nn.Dropout(p=0.2,inplace=False),nn.Linear(mobilev2.classifier[1].in_features, 1000)))
     features = nn.Sequential(*list(mobilev2.children())[:-1])
-    regressor = nn.Sequential(nn.Dropout(p=0.2, inplace=False),nn.Linear(mobilev2.classifier[1].in_features, 12))
+    #regressor = nn.Sequential(nn.Dropout(p=0.2, inplace=False),nn.Linear(mobilev2.classifier[1].in_features, 12))
+    regressor = nn.Sequential(nn.Linear(mobilev2.classifier[1].in_features, 12))
 
     features.to('cuda')
     regressor.to('cuda')
@@ -299,8 +300,8 @@ def train():
     #for param in features.parameters():
     #    param.requires_grad = True
     
-    set_grad_recursive(features, req_grad = False)
-    set_bn_grad_recursive(features, req_grad = True)
+    set_grad_recursive(features, req_grad = True)
+    set_bn_grad_recursive(features, req_grad = False)
 
     for param in regressor.parameters():
         param.requires_grad = True
@@ -333,6 +334,10 @@ def train():
 
     features.eval()
     regressor.train()
+
+    lambda1 = 0.7
+    lambda2 = 0.3
+    
     for epoch in range(num_epochs):
 
         running_loss = 0.0
@@ -351,9 +356,16 @@ def train():
             output = torch.bmm(u,vt)
 
             loss_gt = torch.norm(output-gt_pose)
+
+            rgbs_gt, disps_gt = render_path(poses, hwf, args.chunk, render_kwargs_test)
+            rgbs_p, disps_p = render_path(output, hwf, args.chunk, render_kwargs_test)
+
+            loss_photo = torch.norm(rgbs_p - rgbs_gt)
+
+            loss = lambda1*loss_photo + lambda2*loss_gt
             #print("gt: ",gt_pose)
             #print("guess: ",output)
-            loss_gt.backward()
+            loss.backward()
             optimizer.step()
             running_loss += loss_gt.item()
             running_trans_loss += torch.norm(output[:,:3,3]-gt_pose[:,:3,3]).item()
