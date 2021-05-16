@@ -309,13 +309,17 @@ def train():
     val_images = images[i_val]
     val_poses = poses[i_val]
     val_dataset = ImgPoseDataset(val_images, val_poses)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=bs, shuffle=True)
 
     test_images = images[i_test]
     test_poses = poses[i_test]
     test_dataset = ImgPoseDataset(test_images, test_poses)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
+    dataloaders = dict()
+    dataloaders["train"] = train_loader
+    dataloaders["val"] = val_loader
+    
     optimizer = torch.optim.Adam(params=mobilenet_v2.parameters(), lr=1e-4)
 
     '''
@@ -325,53 +329,70 @@ def train():
 
     mobilenet_v2.train()
 
-    lambda1 = 0.7
-    lambda2 = 0.3
+    lambda1 = 0.0 # photoloss
+    lambda2 = 1.0 - lambda1 #gt loss
 
     global_step = 0
     for epoch in range(num_epochs):
+
         running_loss = 0.0
         running_trans_loss = 0.0
-        for inputs, pose in tqdm(train_loader):
-            optimizer.zero_grad()
 
-            # get the data
-            inputs = inputs.to(device)
-            gt_pose = pose.to(device)
+        print("="*10)
+        for phase in ["train","val"]:
+            if phase == "train":
+                mobilenet_v2.train()
+            else:
+                mobilenet_v2.eval()
+                
+            for inputs, pose in tqdm(dataloaders[phase]):
+                optimizer.zero_grad()
 
-            # forward pass through network
-            output = mobilenet_v2(inputs)
+                # get the data
+                inputs = inputs.to(device)
+                gt_pose = pose.to(device)
+                bs = inputs.shape[0]
 
-            # turn R12 into 3x4 with SVD for SO3 manifold
-            output = output.reshape((bs,3,4))
-            rotation_mat_hat = output[:, :3, :3]
-            translation_vec_hat = output[:, :3, 3]
-            u,s,vt = torch.linalg.svd(rotation_mat_hat, full_matrices=False)
-            rotation_svd_hat = torch.bmm(u,vt)
-            pose_svd_hat =torch.cat((rotation_svd_hat, translation_vec_hat.unsqueeze(2)), dim=2)
+                with torch.set_grad_enabled(phase == "train"):
+                
+                    # forward pass through network
+                    output = mobilenet_v2(inputs)
+                
+                    # turn R12 into 3x4 with SVD for SO3 manifold
+                    output = output.reshape((bs,3,4))
+                    rotation_mat_hat = output[:, :3, :3]
+                    translation_vec_hat = output[:, :3, 3]
+                    u,s,vt = torch.linalg.svd(rotation_mat_hat, full_matrices=False)
+                    rotation_svd_hat = torch.bmm(u,vt)
+                    pose_svd_hat = torch.cat((rotation_svd_hat, translation_vec_hat.unsqueeze(2)), dim=2)
 
-            # get the loss
-            loss_gt = torch.norm(pose_svd_hat-gt_pose)
+                    # get the loss
+                    loss_gt = torch.norm(pose_svd_hat-gt_pose)
 
-            # render some images and eat all the gpu vram
-            # rgbs_gt, disps_gt = render_path(poses, hwf, args.chunk, render_kwargs_test)
-            # rgbs_p, disps_p = render_path(output, hwf, args.chunk, render_kwargs_test)
-            loss_photo = 0
+                    # render some images and eat all the gpu vram
+                    #rgbs_p, disps_p = render_path(output, hwf, args.chunk, render_kwargs_test)
+                    #loss_photo = torch.norm(rgbs_p - inputs)
+                    loss_photo = 0
+                    
+                    loss = lambda1*loss_photo + lambda2*loss_gt
+                    #print("gt: ",gt_pose)
+                    #print("guess: ",output)
+                    if phase == "train":
+                        loss.backward()
+                        optimizer.step()
+                        
+                running_loss += loss.item()
+                running_trans_loss += torch.norm(output[:,:3,3]-gt_pose[:,:3,3]).item()
+            print("Epoch: {} {} Loss: {:.4f} Trans. Loss: {:.4f}".format(epoch, phase, running_loss, running_trans_loss))
 
-            # loss_photo = torch.norm(rgbs_p - rgbs_gt)
-
-            loss = lambda1*loss_photo + lambda2*loss_gt
-            #print("gt: ",gt_pose)
-            #print("guess: ",output)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss_gt.item()
-            running_trans_loss += torch.norm(output[:,:3,3]-gt_pose[:,:3,3]).item()
-
-            global_step += 1
-        print(epoch)
-        print(running_loss)
-        print(running_trans_loss)
+        if epoch%10 == 0 and epoch > 0:
+            print("Saving...")
+            torch.save(mobilenet_v2.state_dict(), os.path.join("snapshots",f'weights_{epoch}_valloss_{running_loss:.04f}.pt'))
+            
+        global_step +=1
+        #print(epoch)
+        #print(running_loss)
+        #print(running_trans_loss)
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
