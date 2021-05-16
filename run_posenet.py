@@ -8,6 +8,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as models
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
@@ -40,10 +41,10 @@ class ImgPoseDataset(Dataset):
     def __init__(self, imgs, poses):
         self.imgs = imgs
         self.poses = poses
-        
+
     def __len__(self):
         return len(self.imgs)
-    
+
     def __getitem__(self,idx):
         img = self.imgs[idx].T
         pose = self.poses[idx]
@@ -62,7 +63,7 @@ def set_grad_recursive(m, req_grad=True):
 
     for child in m.children():
         set_grad_recursive(child, req_grad)
-        
+
 def config_parser():
 
     import configargparse
@@ -284,31 +285,19 @@ def train():
         'far' : far,
     }
     render_kwargs_train.update(bds_dict)
-    render_kwargs_test.update(bds_dict)    
+    render_kwargs_test.update(bds_dict)
 
-    mobilev2 = torch.hub.load('pytorch/vision:v0.9.0', 'mobilenet_v2', pretrained=True)
-        
-    #model_cut = nn.Sequential(*list(mobilev2.children())[:-1],nn.Sequential(nn.Dropout(p=0.2,inplace=False),nn.Linear(mobilev2.classifier[1].in_features, 1000)))
-    features = nn.Sequential(*list(mobilev2.children())[:-1])
-    #regressor = nn.Sequential(nn.Dropout(p=0.2, inplace=False),nn.Linear(mobilev2.classifier[1].in_features, 12))
-    regressor = nn.Sequential(nn.Linear(mobilev2.classifier[1].in_features, 12))
+    # load the pose regression model and freeze the bn weights
+    mobilenet_v2 = models.mobilenet_v2(pretrained=True)
+    num_ftrs = mobilenet_v2.classifier[1].in_features
+    mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 12)
+    mobilenet_v2.to(device)
+    set_bn_grad_recursive(mobilenet_v2, req_grad = False)
 
-    features.to('cuda')
-    regressor.to('cuda')
-
-    # freeze the feature extractor?
-    #for param in features.parameters():
-    #    param.requires_grad = True
-    
-    set_grad_recursive(features, req_grad = True)
-    set_bn_grad_recursive(features, req_grad = False)
-
-    for param in regressor.parameters():
-        param.requires_grad = True
-
+    # data wrangling
     poses = poses[:,:3,:4]
-    images = torch.Tensor(images)
-    poses = torch.Tensor(poses)
+    images = torch.Tensor(images.astype(np.float32))
+    poses = torch.Tensor(poses.astype(np.float32))
 
     bs = 4
 
@@ -327,40 +316,49 @@ def train():
     test_dataset = ImgPoseDataset(test_images, test_poses)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    #optimizer = torch.optim.Adam(params=list(features.parameters())+list(regressor.parameters()), lr=1e-4)
-    optimizer = torch.optim.Adam(params=regressor.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(params=mobilenet_v2.parameters(), lr=1e-4)
 
+    '''
+    training loop
+    '''
     num_epochs = 4000
 
-    features.eval()
-    regressor.train()
+    mobilenet_v2.train()
 
     lambda1 = 0.7
     lambda2 = 0.3
-    
-    for epoch in range(num_epochs):
 
+    global_step = 0
+    for epoch in range(num_epochs):
         running_loss = 0.0
         running_trans_loss = 0.0
         for inputs, pose in tqdm(train_loader):
             optimizer.zero_grad()
+
+            # get the data
             inputs = inputs.to(device)
             gt_pose = pose.to(device)
-            output = features(inputs)
-            output = nn.functional.adaptive_avg_pool2d(output, (1,1))
-            output = torch.flatten(output,1)
-            output = regressor(output)
 
+            # forward pass through network
+            output = mobilenet_v2(inputs)
+
+            # turn R12 into 3x4 with SVD for SO3 manifold
             output = output.reshape((bs,3,4))
-            u,s,vt = torch.linalg.svd(output, full_matrices=False)
-            output = torch.bmm(u,vt)
+            rotation_mat_hat = output[:, :3, :3]
+            translation_vec_hat = output[:, :3, 3]
+            u,s,vt = torch.linalg.svd(rotation_mat_hat, full_matrices=False)
+            rotation_svd_hat = torch.bmm(u,vt)
+            pose_svd_hat =torch.cat((rotation_svd_hat, translation_vec_hat.unsqueeze(2)), dim=2)
 
-            loss_gt = torch.norm(output-gt_pose)
+            # get the loss
+            loss_gt = torch.norm(pose_svd_hat-gt_pose)
 
-            rgbs_gt, disps_gt = render_path(poses, hwf, args.chunk, render_kwargs_test)
-            rgbs_p, disps_p = render_path(output, hwf, args.chunk, render_kwargs_test)
+            # render some images and eat all the gpu vram
+            # rgbs_gt, disps_gt = render_path(poses, hwf, args.chunk, render_kwargs_test)
+            # rgbs_p, disps_p = render_path(output, hwf, args.chunk, render_kwargs_test)
+            loss_photo = 0
 
-            loss_photo = torch.norm(rgbs_p - rgbs_gt)
+            # loss_photo = torch.norm(rgbs_p - rgbs_gt)
 
             loss = lambda1*loss_photo + lambda2*loss_gt
             #print("gt: ",gt_pose)
@@ -369,10 +367,12 @@ def train():
             optimizer.step()
             running_loss += loss_gt.item()
             running_trans_loss += torch.norm(output[:,:3,3]-gt_pose[:,:3,3]).item()
+
+            global_step += 1
         print(epoch)
         print(running_loss)
         print(running_trans_loss)
-    
+
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
     train()
