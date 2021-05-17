@@ -210,7 +210,7 @@ def train():
         disps = images[...,3]
         print("disps_max",np.max(disps))
         print("disps_min",np.min(disps))
-        
+
         if args.white_bkgd:
             images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
         else:
@@ -287,11 +287,11 @@ def train():
     visualizer.plot_rgb((rgb_rgt * 255).astype(np.uint8), "rgb_rgt")
     visualizer.plot_rgb(cv2.cvtColor((np.copy(disp_rgt)*255).astype("float32"), cv2.COLOR_GRAY2RGB),"disparity")
     target_disp = torch.from_numpy(disp_rgt).float().to(device)
-    
+
     # random init
     t_rng = 0.5
     r_rng = 10
-    
+
     # random_axis = np.random.randn((3))
     # random_axis = random_axis / np.linalg.norm(random_axis)
     random_axis = sample_unit_sphere()
