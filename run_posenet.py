@@ -366,14 +366,14 @@ def train():
     mobilenet_v2.train()
     global_step = 0
     for epoch in range(num_epochs):
-        running_loss = 0.0
-        running_image_loss = 0.0
-        running_pose_loss = 0.0
-        running_trans_error = 0.0
-        running_rot_error = 0.0
-
         print("="*10)
         for phase in ["train","val"]:
+            running_loss = 0.0
+            running_image_loss = 0.0
+            running_pose_loss = 0.0
+            running_trans_error = 0.0
+            running_rot_error = 0.0
+
             if phase == "train":
                 mobilenet_v2.train()
             else:
