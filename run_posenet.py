@@ -55,7 +55,7 @@ class ImgPoseDataset(Dataset):
 def set_bn_grad_recursive(m, req_grad=True):
     if isinstance(m, nn.BatchNorm2d):
         m.requires_grad = req_grad
-        print(m)
+        # print(m)
 
     for child in m.children():
         set_bn_grad_recursive(child, req_grad)
