@@ -505,7 +505,16 @@ def train():
         # save model
         if epoch%10 == 0 and epoch > 0:
             print("Saving...")
-            torch.save(mobilenet_v2.state_dict(), os.path.join("snapshots",f'weights_{epoch}_valloss_{running_loss:.04f}.pt'))
+            if args.use_just_pose_loss:
+                if args.predict_r_12:
+                    torch.save(mobilenet_v2.state_dict(), os.path.join("snapshots/just_pose_loss_r12",f'weights_{epoch}_lambda1_{lambda1}_lambda2_{lambda2}_valloss_{running_loss:.04f}.pt'))
+                else:
+                    torch.save(mobilenet_v2.state_dict(), os.path.join("snapshots/just_pose_loss_r6",f'weights_{epoch}_lambda1_{lambda1}_lambda2_{lambda2}_valloss_{running_loss:.04f}.pt'))
+            else:
+                if args.predict_r_12:
+                    torch.save(mobilenet_v2.state_dict(), os.path.join("snapshots/photo_and_pose_loss_r12",f'weights_{epoch}_lambda1_{lambda1}_lambda2_{lambda2}_valloss_{running_loss:.04f}.pt'))
+                else:
+                    torch.save(mobilenet_v2.state_dict(), os.path.join("snapshots/photo_and_pose_loss_r6",f'weights_{epoch}_lambda1_{lambda1}_lambda2_{lambda2}_valloss_{running_loss:.04f}.pt'))
 
         global_step +=1
         #print(epoch)
