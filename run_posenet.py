@@ -357,8 +357,6 @@ def train():
 
                     # forward pass through network
                     output = mobilenet_v2(inputs)
-                    print(f"inputs: {inputs.size()}")
-                    print(f"output: {output.size()}")
 
                     # turn R12 into 3x4 with SVD for SO3 manifold
                     output = output.reshape((actual_bs,3,4))
