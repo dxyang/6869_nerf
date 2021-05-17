@@ -21,10 +21,10 @@ Pillow = "^8.2.0"
 tensorboard = "^2.5.0"
 imageio = "^2.9.0"
 imageio-ffmpeg = "^0.4.3"
-torchsearchsorted = {path = "nerf-pytorch/torchsearchsorted"}
 ConfigArgParse = "^1.4"
 plotly = "^4.14.3"
 visdom = "^0.1.8"
+torchsearchsorted = {path = "third_party/torchsearchsorted-1.1-cp38-cp38-linux_x86_64.whl"}
 
 [tool.poetry.dev-dependencies]
 

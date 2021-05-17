@@ -1282,18 +1282,17 @@ python-versions = "*"
 [[package]]
 name = "torchsearchsorted"
 version = "1.1"
-description = ""
+description = "A searchsorted implementation for pytorch"
 category = "main"
 optional = false
 python-versions = "*"
-develop = false
 
 [package.extras]
 test = ["pytest"]
 
 [package.source]
-type = "directory"
-url = "nerf-pytorch/torchsearchsorted"
+type = "file"
+url = "third_party/torchsearchsorted-1.1-cp38-cp38-linux_x86_64.whl"
 
 [[package]]
 name = "torchvision"
@@ -1440,7 +1439,7 @@ notebook = ">=4.4.1"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "13cd6a47367fe22f782cf23160b063e472b4ccdc2688ab742e612173354d5b1c"
+content-hash = "c20f1a9209e20f3ee527dc4d1a8f5de81c357941cb860d512d17207481646e3a"
 
 [metadata.files]
 absl-py = [
@@ -2243,7 +2242,9 @@ torchaudio = [
 torchfile = [
     {file = "torchfile-0.1.0.tar.gz", hash = "sha256:a53dfe134b737845a9f2cb24fe0585317874f965932cebdb0439d13c8da4136e"},
 ]
-torchsearchsorted = []
+torchsearchsorted = [
+    {file = "torchsearchsorted-1.1-cp38-cp38-linux_x86_64.whl", hash = "sha256:b6050d25969207548f3f90662e4880952295d1d549eb43c1a2b0d4b8f56de7d4"},
+]
 torchvision = [
     {file = "torchvision-0.9.1-cp36-cp36m-macosx_10_9_x86_64.whl", hash = "sha256:da4c4f7363b60b0637354974ea0a29dbc301f66c9f25d92ed5f10637909f3500"},
     {file = "torchvision-0.9.1-cp36-cp36m-manylinux1_x86_64.whl", hash = "sha256:8a937cd3b53656e15de03671f8a638b5e8e4c100725b854d73bdb51e41455e9e"},
