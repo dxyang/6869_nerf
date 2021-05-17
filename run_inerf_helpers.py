@@ -10,6 +10,15 @@ import torch
 '''
 torch implementations
 '''
+def screwToMatrixExp4_torch_batch(batch_expc6):
+    bs = batch_expc6.size()[0]
+    se3s = []
+    for b_idx in range(bs):
+        se3 = screwToMatrixExp4_torch(batch_expc6[b_idx])
+        se3s.append(se3.unsqueeze(0))
+    se3_batch = torch.cat(se3s)
+    return se3_batch
+
 def screwToMatrixExp4_torch(expc6):
     # convert R6 to axis angle (w, v) and theta
     axisang, theta = AxisAng6_torch(expc6)

@@ -28,6 +28,8 @@ curr_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(f"{curr_path}/nerf-pytorch")
 from run_nerf_helpers import *
 from run_nerf import batchify, run_network, batchify_rays, render, render_rays, render_path, create_nerf, raw2outputs
+from run_inerf_helpers import screwToMatrixExp4_torch_batch
+
 
 from load_llff import load_llff_data
 from load_deepvoxels import load_dv_data
@@ -290,7 +292,11 @@ def train():
     # load the pose regression model and freeze the bn weights
     mobilenet_v2 = models.mobilenet_v2(pretrained=True)
     num_ftrs = mobilenet_v2.classifier[1].in_features
-    mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 12)
+    predict_r_12 = False
+    if predict_r_12:
+        mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 12)
+    else:
+        mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 6)
     mobilenet_v2.to(device)
     set_bn_grad_recursive(mobilenet_v2, req_grad = False)
 
@@ -299,7 +305,7 @@ def train():
     images = torch.Tensor(images.astype(np.float32))
     poses = torch.Tensor(poses.astype(np.float32))
 
-    bs = 2
+    bs = 1
 
     train_images = images[i_train]
     train_poses = poses[i_train]
@@ -362,12 +368,16 @@ def train():
                     output = mobilenet_v2(inputs)
 
                     # turn R12 into 3x4 with SVD for SO3 manifold
-                    output = output.reshape((actual_bs,3,4))
-                    rotation_mat_hat = output[:, :3, :3]
-                    translation_vec_hat = output[:, :3, 3]
-                    u,s,vt = torch.linalg.svd(rotation_mat_hat, full_matrices=False)
-                    rotation_svd_hat = torch.bmm(u,vt)
-                    pose_svd_hat = torch.cat((rotation_svd_hat, translation_vec_hat.unsqueeze(2)), dim=2)
+                    if predict_r_12:
+                        output = output.reshape((actual_bs,3,4))
+                        rotation_mat_hat = output[:, :3, :3]
+                        translation_vec_hat = output[:, :3, 3]
+                        u,s,vt = torch.linalg.svd(rotation_mat_hat, full_matrices=False)
+                        rotation_svd_hat = torch.bmm(u,vt)
+                        pose_svd_hat = torch.cat((rotation_svd_hat, translation_vec_hat.unsqueeze(2)), dim=2)
+                    else:
+                        se3_as_3x4_batch = screwToMatrixExp4_torch_batch(output)[:, :3, :4]
+                        pose_svd_hat = se3_as_3x4_batch # just for compatibility with later code
 
                     # get the loss
                     loss_gt = torch.norm(pose_svd_hat-gt_pose)
@@ -376,7 +386,7 @@ def train():
                     render some images and eat all the gpu vram
                     - sample rays for computational reasons
                     '''
-                    N_rand = 512
+                    N_rand = 1024
                     # generate all the rays through all the pixels
                     rgb_hats = []
                     rgb_targets = []
