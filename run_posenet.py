@@ -336,7 +336,10 @@ def train():
     for epoch in range(num_epochs):
 
         running_loss = 0.0
-        running_trans_loss = 0.0
+        running_image_loss = 0.0
+        running_pose_loss = 0.0
+        running_trans_error = 0.0
+        running_rot_error = 0.0
 
         print("="*10)
         for phase in ["train","val"]:
@@ -430,15 +433,35 @@ def train():
                     loss_photo = torch.norm(batch_rgb_hats - batch_rgb_targets)
 
                     loss = lambda1*loss_photo + lambda2*loss_gt
-                    #print("gt: ",gt_pose)
-                    #print("guess: ",output)
                     if phase == "train":
                         loss.backward()
                         optimizer.step()
 
+                # book keeping
                 running_loss += loss.item()
-                running_trans_loss += torch.norm(output[:,:3,3]-gt_pose[:,:3,3]).item()
-            print("Epoch: {} {} Loss: {:.4f} Trans. Loss: {:.4f}".format(epoch, phase, running_loss, running_trans_loss))
+                running_image_loss += loss_photo.item()
+                running_pose_loss += loss_gt.item()
+
+                for bs_idx in range(actual_bs):
+                    curr_pose_hat = np.eye(4)
+                    curr_pose_gt = np.eye(4)
+                    curr_pose_hat[:3, :4] = pose_svd_hat[bs_idx].detach().cpu().numpy()
+                    curr_pose_gt[:3, :4] = gt_pose[bs_idx].detach().cpu().numpy()
+                    t_err, rot_err = check_pose_error(curr_pose_hat, curr_pose_gt)
+
+                    running_trans_error += t_err
+                    running_rot_error += rot_err
+
+
+            print("Epoch: {} {} Avg loss: {:.4f}, Avg image loss: {:.4f}, Avg pose loss: {:4f}, Avg trans error: {:.4f}, Avg rot error: {:.4f}".format(
+                    epoch,
+                    phase,
+                    running_loss / len(dataloaders[phase]),
+                    running_image_loss / len(dataloaders[phase]),
+                    running_pose_loss / len(dataloaders[phase]),
+                    running_trans_error / len(dataloaders[phase]),
+                    running_rot_error  / len(dataloaders[phase])
+            ))
 
         if epoch%10 == 0 and epoch > 0:
             print("Saving...")
