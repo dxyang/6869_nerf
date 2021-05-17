@@ -351,14 +351,17 @@ def train():
                 # get the data
                 inputs = inputs.to(device)
                 gt_pose = pose.to(device)
+                actual_bs = inputs.size()[0]
 
                 with torch.set_grad_enabled(phase == "train"):
 
                     # forward pass through network
                     output = mobilenet_v2(inputs)
+                    print(f"inputs: {inputs.size()}")
+                    print(f"output: {output.size()}")
 
                     # turn R12 into 3x4 with SVD for SO3 manifold
-                    output = output.reshape((bs,3,4))
+                    output = output.reshape((actual_bs,3,4))
                     rotation_mat_hat = output[:, :3, :3]
                     translation_vec_hat = output[:, :3, 3]
                     u,s,vt = torch.linalg.svd(rotation_mat_hat, full_matrices=False)
@@ -376,7 +379,7 @@ def train():
                     # generate all the rays through all the pixels
                     rgb_hats = []
                     rgb_targets = []
-                    for bs_idx in range(bs):
+                    for bs_idx in range(actual_bs):
                         # one img at a time within this batch
                         pose_hat_oi = pose_svd_hat[bs_idx]
                         pose_gt_oi = gt_pose[bs_idx]
