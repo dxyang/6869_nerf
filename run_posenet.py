@@ -320,7 +320,9 @@ def train():
     '''
     num_epochs = 4000
     lr=1e-4
+    lr_decay = 0.99954195956
     if args.use_just_pose_loss:
+        N_rand = 0.0
         lambda1 = 0.0 # photoloss
         lambda2 = 1.0 - lambda1 #gt loss
         bs = 128
@@ -330,7 +332,7 @@ def train():
         lambda2 = 0.7 # pose
         bs = 1
 
-    print(f"photo lamdba 1: {lambda1}\npose lambda 2: {lambda2}\nbatch_size: {bs}")
+    print(f"photo lamdba 1: {lambda1}\npose lambda 2: {lambda2}\nbatch_size: {bs}, num_render_rays: {N_rand}")
     '''
     ------------------------------------------------------------------------------------------------------------
     '''
@@ -356,6 +358,7 @@ def train():
     dataloaders["val"] = val_loader
 
     optimizer = torch.optim.Adam(params=mobilenet_v2.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
 
     '''
     training loop
@@ -498,6 +501,10 @@ def train():
                     running_rot_error  / len(dataloaders[phase])
             ))
 
+        # update learning rate
+        scheduler.step()
+
+        # save model
         if epoch%10 == 0 and epoch > 0:
             print("Saving...")
             torch.save(mobilenet_v2.state_dict(), os.path.join("snapshots",f'weights_{epoch}_valloss_{running_loss:.04f}.pt'))
