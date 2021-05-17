@@ -6,4 +6,4 @@
 # srun --gres=gpu --time 21-00:00:00 --pty ./singularity_run_container.sh
 
 # Use this if you want a specific machine (with maximum time)
-srun --nodelist=bean2 --time 21-00:00:00 --pty ./singularity_run_container.sh
+srun --nodelist=lebkuchen --time 21-00:00:00 --pty ./singularity_run_container.sh
