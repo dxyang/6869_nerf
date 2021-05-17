@@ -185,6 +185,14 @@ def config_parser():
     parser.add_argument("--sample_rays", type=str, default="random",
                         help='how to sample rays')
 
+    # mobilenet output space r12 or r6
+    parser.add_argument("--predict_r_12", action='store_true',
+                        help='mobile net pose output dimension')
+
+    # mobilenet output space r12 or r6
+    parser.add_argument("--use_just_pose_loss", action='store_true',
+                        help='pose loss only, no image rendering loss')
+
     return parser
 
 def train():
@@ -292,10 +300,11 @@ def train():
     # load the pose regression model and freeze the bn weights
     mobilenet_v2 = models.mobilenet_v2(pretrained=True)
     num_ftrs = mobilenet_v2.classifier[1].in_features
-    predict_r_12 = False
-    if predict_r_12:
+    if args.predict_r_12:
+        print(f"mobile net is outputting in R12")
         mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 12)
     else:
+        print(f"mobile net is outputting in R6")
         mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 6)
     mobilenet_v2.to(device)
     set_bn_grad_recursive(mobilenet_v2, req_grad = False)
@@ -305,7 +314,27 @@ def train():
     images = torch.Tensor(images.astype(np.float32))
     poses = torch.Tensor(poses.astype(np.float32))
 
-    bs = 1
+    '''
+    EDIT HYPERPARAMETERS HERE
+    ------------------------------------------------------------------------------------------------------------
+    '''
+    num_epochs = 4000
+    lr=1e-4
+    if args.use_just_pose_loss:
+        lambda1 = 0.0 # photoloss
+        lambda2 = 1.0 - lambda1 #gt loss
+        bs = 128
+    else:
+        N_rand = 1024 + 256 # num rays to render
+        lambda1 = 0.3 # photo
+        lambda2 = 0.7 # pose
+        bs = 1
+
+    print(f"photo lamdba 1: {lambda1}\npose lambda 2: {lambda2}\nbatch_size: {bs}")
+    '''
+    ------------------------------------------------------------------------------------------------------------
+    '''
+
 
     train_images = images[i_train]
     train_poses = poses[i_train]
@@ -326,18 +355,12 @@ def train():
     dataloaders["train"] = train_loader
     dataloaders["val"] = val_loader
 
-    optimizer = torch.optim.Adam(params=mobilenet_v2.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(params=mobilenet_v2.parameters(), lr=lr)
 
     '''
     training loop
     '''
-    num_epochs = 4000
-
     mobilenet_v2.train()
-
-    lambda1 = 0.0 # photoloss
-    lambda2 = 1.0 - lambda1 #gt loss
-
     global_step = 0
     for epoch in range(num_epochs):
 
@@ -368,7 +391,7 @@ def train():
                     output = mobilenet_v2(inputs)
 
                     # turn R12 into 3x4 with SVD for SO3 manifold
-                    if predict_r_12:
+                    if args.predict_r_12:
                         output = output.reshape((actual_bs,3,4))
                         rotation_mat_hat = output[:, :3, :3]
                         translation_vec_hat = output[:, :3, 3]
@@ -382,65 +405,67 @@ def train():
                     # get the loss
                     loss_gt = torch.norm(pose_svd_hat-gt_pose)
 
-                    '''
-                    render some images and eat all the gpu vram
-                    - sample rays for computational reasons
-                    '''
-                    N_rand = 1024
-                    # generate all the rays through all the pixels
-                    rgb_hats = []
-                    rgb_targets = []
-                    for bs_idx in range(actual_bs):
-                        # one img at a time within this batch
-                        pose_hat_oi = pose_svd_hat[bs_idx]
-                        pose_gt_oi = gt_pose[bs_idx]
-                        img_oi = inputs[bs_idx].permute(1, 2, 0) # HWC
+                    if args.use_just_pose_loss:
+                        loss_photo = 0
+                    else:
+                        '''
+                        render some images and eat all the gpu vram
+                        - sample rays for computational reasons
+                        '''
+                        # generate all the rays through all the pixels
+                        rgb_hats = []
+                        rgb_targets = []
+                        for bs_idx in range(actual_bs):
+                            # one img at a time within this batch
+                            pose_hat_oi = pose_svd_hat[bs_idx]
+                            pose_gt_oi = gt_pose[bs_idx]
+                            img_oi = inputs[bs_idx].permute(1, 2, 0) # HWC
 
-                        rays_o, rays_d = get_rays(H, W, focal, pose_gt_oi) # (H, W, 3), (H, W, 3)
+                            rays_o, rays_d = get_rays(H, W, focal, pose_gt_oi) # (H, W, 3), (H, W, 3)
 
-                        # use orb features to pick keypoints
-                        margin = 30
-                        orb = cv2.ORB_create(
-                            nfeatures=int(N_rand*2),       # max number of features to retain
-                            edgeThreshold=margin,            # size of border where features are not detected
-                            patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
-                        )
-                        target_with_orb_features = np.copy(img_oi.cpu().numpy()) * 255
-                        target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
-                        kps = orb.detect(target_with_orb_features_opencv,None)
+                            # use orb features to pick keypoints
+                            margin = 30
+                            orb = cv2.ORB_create(
+                                nfeatures=int(N_rand*2),       # max number of features to retain
+                                edgeThreshold=margin,            # size of border where features are not detected
+                                patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+                            )
+                            target_with_orb_features = np.copy(img_oi.cpu().numpy()) * 255
+                            target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
+                            kps = orb.detect(target_with_orb_features_opencv,None)
 
-                        I = 3
-                        kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
+                            I = 3
+                            kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
 
-                        tmp = np.zeros((H, W)).astype("uint8")
+                            tmp = np.zeros((H, W)).astype("uint8")
 
-                        for i,j in kps_ij:
-                            tmp[i,j] = 255
-                        kern = np.ones((5,5))
-                        for i in range(I):
-                            tmp = cv2.dilate(tmp, kern)
+                            for i,j in kps_ij:
+                                tmp[i,j] = 255
+                            kern = np.ones((5,5))
+                            for i in range(I):
+                                tmp = cv2.dilate(tmp, kern)
 
-                        d_kps_ij = np.argwhere(tmp > 0)
-                        np.random.shuffle(d_kps_ij)
+                            d_kps_ij = np.argwhere(tmp > 0)
+                            np.random.shuffle(d_kps_ij)
 
-                        select_coords = torch.from_numpy(d_kps_ij[0:N_rand])
+                            select_coords = torch.from_numpy(d_kps_ij[0:N_rand])
 
-                        rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-                        rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-                        batch_rays = torch.stack([rays_o, rays_d], 0)
-                        target_s = img_oi[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+                            rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+                            rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+                            batch_rays = torch.stack([rays_o, rays_d], 0)
+                            target_s = img_oi[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
-                        # render
-                        rgb_hat, _, _, _ = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
-                                                        retraw=True,
-                                                        **render_kwargs_test)
-                        rgb_hats.append(rgb_hat)
-                        rgb_targets.append(target_s)
+                            # render
+                            rgb_hat, _, _, _ = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
+                                                            retraw=True,
+                                                            **render_kwargs_test)
+                            rgb_hats.append(rgb_hat)
+                            rgb_targets.append(target_s)
 
-                    # concatenate individual renders into a batch and calculate loss
-                    batch_rgb_hats = torch.cat(rgb_hats, dim=0)
-                    batch_rgb_targets = torch.cat(rgb_targets, dim=0)
-                    loss_photo = torch.norm(batch_rgb_hats - batch_rgb_targets)
+                        # concatenate individual renders into a batch and calculate loss
+                        batch_rgb_hats = torch.cat(rgb_hats, dim=0)
+                        batch_rgb_targets = torch.cat(rgb_targets, dim=0)
+                        loss_photo = torch.norm(batch_rgb_hats - batch_rgb_targets)
 
                     loss = lambda1*loss_photo + lambda2*loss_gt
                     if phase == "train":
