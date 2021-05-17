@@ -325,7 +325,7 @@ def train():
         N_rand = 0.0
         lambda1 = 0.0 # photoloss
         lambda2 = 1.0 - lambda1 #gt loss
-        bs = 128
+        bs = 32
     else:
         N_rand = 1024 + 256 # num rays to render
         lambda1 = 0.3 # photo
@@ -366,7 +366,6 @@ def train():
     mobilenet_v2.train()
     global_step = 0
     for epoch in range(num_epochs):
-
         running_loss = 0.0
         running_image_loss = 0.0
         running_pose_loss = 0.0
@@ -421,10 +420,9 @@ def train():
                         for bs_idx in range(actual_bs):
                             # one img at a time within this batch
                             pose_hat_oi = pose_svd_hat[bs_idx]
-                            pose_gt_oi = gt_pose[bs_idx]
                             img_oi = inputs[bs_idx].permute(1, 2, 0) # HWC
 
-                            rays_o, rays_d = get_rays(H, W, focal, pose_gt_oi) # (H, W, 3), (H, W, 3)
+                            rays_o, rays_d = get_rays(H, W, focal, pose_hat_oi) # (H, W, 3), (H, W, 3)
 
                             # use orb features to pick keypoints
                             margin = 30
@@ -477,7 +475,7 @@ def train():
 
                 # book keeping
                 running_loss += loss.item()
-                running_image_loss += loss_photo.item()
+                running_image_loss += 0.0 if args.use_just_pose_loss else loss_photo.item()
                 running_pose_loss += loss_gt.item()
 
                 for bs_idx in range(actual_bs):
