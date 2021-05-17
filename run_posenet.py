@@ -453,9 +453,9 @@ def train():
                     running_rot_error += rot_err
 
 
-            print("Epoch: {} {} Avg loss: {:.4f}, Avg image loss: {:.4f}, Avg pose loss: {:4f}, Avg trans error: {:.4f}, Avg rot error: {:.4f}".format(
-                    epoch,
+            print("[{}]Epoch: {} Avg loss: {:.4f}, Avg image loss: {:.4f}, Avg pose loss: {:4f}, Avg trans error: {:.4f}, Avg rot error: {:.4f}".format(
                     phase,
+                    epoch,
                     running_loss / len(dataloaders[phase]),
                     running_image_loss / len(dataloaders[phase]),
                     running_pose_loss / len(dataloaders[phase]),
