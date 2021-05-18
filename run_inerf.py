@@ -386,7 +386,7 @@ def train():
         '''
         ~ main optimization loop ~
         '''
-        N_rand = args.batchsize
+        N_rand = args.N_rand
         global_step = 0
         num_steps = args.num_steps
         while global_step < num_steps:
@@ -543,8 +543,9 @@ def train():
                 t_err, rot_err = check_pose_error(T_world_cameraHat_np, T_world_camera)
                 print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}")
 
-                with open(join(folder, f"{img_i:03d}.txt"), "a") as f:
-                    f.write(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}\n")
+                if args.save_results:
+                    with open(join(folder, f"{img_i:03d}.txt"), "a") as f:
+                        f.write(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}\n")
 
             if args.dbg and global_step % 10 == 0:
                 # current camera pose
