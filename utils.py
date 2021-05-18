@@ -135,7 +135,7 @@ def load_data(args):
 
         # added by dxy - we like poses in 4x4
         bottom = np.expand_dims(np.expand_dims(np.array([0, 0, 0, 1.0]), axis=0), axis=0) #1x1x4
-        bottom_batch = np.concatenate([bottom for _ in range(20)])
+        bottom_batch = np.concatenate([bottom for _ in range(poses.shape[0])])
         poses = np.hstack((poses, bottom_batch))
 
     elif args.dataset_type == 'blender':
