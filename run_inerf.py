@@ -242,8 +242,12 @@ def train():
             target_disp = torch.from_numpy(disp_rgt).float().to(device)
 
         # random init
-        t_rng = 0.5
-        r_rng = 20
+        if args.dataset_type == 'llff':
+            t_rng = 0.1
+            r_rng = 40
+        elif args.dataset_type == 'blender':
+            t_rng = 0.2
+            r_rng = 40
         random_axis = sample_unit_sphere()
         random_angle_rads = np.deg2rad(np.random.uniform(-r_rng, r_rng))
         random_translation = np.random.uniform(-t_rng, t_rng, 3)
