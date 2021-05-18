@@ -11,6 +11,9 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
 import visdom
+from os.path import join, isdir
+from os import makedirs
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 
@@ -151,6 +154,14 @@ def config_parser():
     # how to sample rays
     parser.add_argument("--sample_rays", type=str, default="random",
                         help='how to sample rays')
+    parser.add_argument("--num_steps", type=int, default=300, help="Number of iterations to run")
+    parser.add_argument("--batchsize", type=int, default=512, help="Number of rays to use")
+
+    # testing
+    parser.add_argument("--split", type=str, default="train", help="options are train, val, and test, default is train")
+    parser.add_argument("--use_disparity", action="store_true", help="use disparity")
+    #parser.add_argument("--use_disparity_only", action="store_true", help="use disparity ONLY") #todo
+    parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
 
     return parser
 
@@ -207,10 +218,6 @@ def train():
         near = 2.
         far = 6.
 
-        disps = images[...,3]
-        print("disps_max",np.max(disps))
-        print("disps_min",np.min(disps))
-
         if args.white_bkgd:
             images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
         else:
@@ -265,286 +272,329 @@ def train():
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
-
     '''
     let's pick a random image that we want to estimate the pose of
     '''
-    img_i = np.random.choice(i_train)
-    target = images[img_i]
-    target = torch.from_numpy(target).float().to(device)
+    indxs = dict()
+    indxs["train"] = i_train
+    indxs["val"] = i_val
+    indxs["test"] = i_test
 
-    pose = poses[img_i, :3,:4]
-    T_world_camera = poses[img_i, :4,:4] # camera pose in world frame
+    print("Num images: ", len(indxs[args.split]))
+    print("Use disparity? ", args.use_disparity)
 
-    print(f"Image: {img_i}")
-    print(f"GT camera pose: {pose}")
+    if args.save_results:
+        obj_name = Path(args.config).stem
+        if args.use_disparity:
+            folder = join("results_with_disparity_bs_"+str(args.batchsize),obj_name)
+        else:
+            folder = join("results_bs_"+str(args.batchsize),obj_name)
+            
+        if not isdir(folder): makedirs(folder)
+    
+    for img_i in indxs[args.split]:
+        img_i = np.random.choice(i_train)
+        target = images[img_i]
+        target = torch.from_numpy(target).float().to(device)
 
-    with torch.no_grad():
-        rgbs_rgt, disps_rgt = render_path(torch.from_numpy(np.expand_dims(T_world_camera[:3, :4],0)).float().to(device), hwf, args.chunk, render_kwargs_test)
+        pose = poses[img_i, :3,:4]
+        T_world_camera = poses[img_i, :4,:4] # camera pose in world frame
 
-    rgb_rgt = rgbs_rgt[0]
-    disp_rgt = disps_rgt[0]
-    visualizer.plot_rgb((rgb_rgt * 255).astype(np.uint8), "rgb_rgt")
-    visualizer.plot_rgb(cv2.cvtColor((np.copy(disp_rgt)*255).astype("float32"), cv2.COLOR_GRAY2RGB),"disparity")
-    target_disp = torch.from_numpy(disp_rgt).float().to(device)
+        print(f"Image: {img_i}")
+        print(f"GT camera pose: {pose}")
 
-    # random init
-    t_rng = 0.5
-    r_rng = 10
-
-    # random_axis = np.random.randn((3))
-    # random_axis = random_axis / np.linalg.norm(random_axis)
-    random_axis = sample_unit_sphere()
-    random_angle_rads = np.deg2rad(np.random.uniform(-r_rng,r_rng))
-    # random_translation = np.zeros((3))
-    # random_angle_rads = (np.random.rand() - 0.5) * 2 * 20 * np.pi / 180 # random [-20, 20 degrees]
-    # random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters
-    # random_translation = np.array([random.uniform(-0.2, 0.2) for _ in range(3)]) # random [-0.2, 0.2] meters
-    random_translation = np.random.uniform(-t_rng,t_rng,3)
-    random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle_rads)
-
-    T_rotated_original = np.eye(4)
-    T_rotated_original[:3, :3] = random_rot_mat3
-
-    T_translated_original = np.eye(4)
-    T_translated_original[:3, 3] = random_translation
-
-    T_offset_original = np.matmul(T_translated_original, T_rotated_original)
-
-    T_world_cameraInit = np.matmul(T_offset_original, T_world_camera).astype(float)
-    T_world_cameraInit = torch.from_numpy(T_world_cameraInit).float().to(device)
-    print(f"offset: t: {random_translation}, rot: {random_angle_rads * 180 / np.pi} degrees around {random_axis}")
-
-    if args.dbg:
-        T_camera_world = np.linalg.inv(T_world_camera)
-        T_cameraInit_world = np.linalg.inv(T_world_cameraInit.cpu().numpy())
-
-        initial_scene = PlotlyScene(
-            x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
-        )
-        plot_transform(initial_scene.figure, np.eye(4), "cam frame", linelength=0.5, linewidth=10)
-        plot_transform(initial_scene.figure, T_world_cameraInit.cpu().numpy(), "T_world_camInit", linelength=0.5, linewidth=10)
-        plot_transform(initial_scene.figure, T_world_camera, "T_world_cam", linelength=0.5, linewidth=10)
-
-        visualizer.plot_scene(initial_scene, "initial")
-        visualizer.plot_rgb(target.cpu().numpy(), "target")
-
-        if args.dbg_render_imgs:
+        if args.use_disparity:
             with torch.no_grad():
-                rgbs, _ = render_path(torch.unsqueeze(T_world_cameraInit, 0), hwf, args.chunk, render_kwargs_test)
-            rgb = rgbs[0]
-            visualizer.plot_rgb((rgb * 255).astype(np.uint8), "target_hat")
+                Twc = torch.from_numpy(np.expand_dims(T_world_camera[:3, :4],0)).float().to(device)
+                rgbs_rgt, disps_rgt = render_path(Twc, hwf, args.chunk, render_kwargs_test)
 
-    '''
-    we go from our R6 parameterization of an offset to an SE3 transform
-    we can later premultiply T_0 by to get the new camera pose in world frame
-    '''
-    # sample a 6-vector of exponential coordinates
-    screw_exp = torch.normal(mean=torch.zeros(6), std=1e-6 * torch.ones(6)).to(device)
-    screw_exp.requires_grad = True
+            rgb_rgt = rgbs_rgt[0]
+            disp_rgt = disps_rgt[0]
+            visualizer.plot_rgb((rgb_rgt * 255).astype(np.uint8), "rgb_rgt")
+            visualizer.plot_rgb(cv2.cvtColor((np.copy(disp_rgt)*255).astype("float32"), cv2.COLOR_GRAY2RGB),"disparity")
+            target_disp = torch.from_numpy(disp_rgt).float().to(device)
 
-    # sanity check the initial pose error
-    T_newWorld_oldWorld = screwToMatrixExp4_torch(screw_exp)
-    T_world_cameraHat = torch.mm(T_newWorld_oldWorld, T_world_cameraInit)
-    t_err, rot_err = check_pose_error(T_world_cameraHat.detach().cpu().numpy(), T_world_camera)
-    print(f"beginning: trans error: {t_err}, rot error: {rot_err}")
+        # random init
+        t_rng = 0.5
+        r_rng = 20
 
-    '''
-    optimizer
-    tl;dr we want to render rays of the camera pose and backpropagate the loss to update the
-    6 parameters of our se3 representation, the omega and nu
-    '''
-    initial_lr = 0.01
-    optimizer = torch.optim.Adam(params=[screw_exp], lr=initial_lr, betas=(0.9, 0.999))
+        # random_axis = np.random.randn((3))
+        # random_axis = random_axis / np.linalg.norm(random_axis)
+        random_axis = sample_unit_sphere()
+        random_angle_rads = np.deg2rad(np.random.uniform(-r_rng,r_rng))
+        # random_translation = np.zeros((3))
+        # random_angle_rads = (np.random.rand() - 0.5) * 2 * 20 * np.pi / 180 # random [-20, 20 degrees]
+        # random_translation = (np.random.rand((3)) - 0.5) * 2 * 0.2 # random [-0.2, 0.2] meters
+        # random_translation = np.array([random.uniform(-0.2, 0.2) for _ in range(3)]) # random [-0.2, 0.2] meters
+        random_translation = np.random.uniform(-t_rng,t_rng,3)
+        random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle_rads)
 
-    '''
-    ~ main optimization loop ~
-    '''
-    N_rand = 512
-    global_step = 0
-    num_steps = 300
-    while global_step < num_steps:
-        # convert to se4
-        T_newWorld_oldWorld = screwToMatrixExp4_torch(screw_exp)
-        assert(TestIfSO3(T_newWorld_oldWorld.cpu().detach().numpy()[:3, :3])) # sanity check
+        T_rotated_original = np.eye(4)
+        T_rotated_original[:3, :3] = random_rot_mat3
 
-        # premultiply our estimate as specified in the paper
-        T_world_cameraHat = torch.mm(T_newWorld_oldWorld, T_world_cameraInit)
-        # print(f"T_world_cameraHat: \n{T_world_cameraHat}")
+        T_translated_original = np.eye(4)
+        T_translated_original[:3, 3] = random_translation
 
-        '''
-        sampling rays
-        a) random
-        b) interest point
-        c) interest region
-        '''
-        # generate all the rays through all the pixels
-        rays_o, rays_d = get_rays(H, W, focal, T_world_cameraHat[:3, :4]) # (H, W, 3), (H, W, 3)
+        T_offset_original = np.matmul(T_translated_original, T_rotated_original)
 
-        if args.sample_rays == "random":
-            # randomly sample N_rand rays from all HxW possibilities
-            coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
-            coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
-            select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
-            select_coords = coords[select_inds].long()  # (N_rand, 2)
-        elif args.sample_rays == "feature_points":
-            # use orb features to pick keypoints
-            margin = 30
-            orb = cv2.ORB_create(
-                nfeatures=int(N_rand * 2),       # max number of features to retain
-                edgeThreshold=margin,            # size of border where features are not detected
-                patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+        T_world_cameraInit = np.matmul(T_offset_original, T_world_camera).astype(float)
+        T_world_cameraInit = torch.from_numpy(T_world_cameraInit).float().to(device)
+        print(f"offset: t: {random_translation}, rot: {random_angle_rads * 180 / np.pi} degrees around {random_axis}")
+
+        if args.dbg:
+            T_camera_world = np.linalg.inv(T_world_camera)
+            T_cameraInit_world = np.linalg.inv(T_world_cameraInit.cpu().numpy())
+
+            initial_scene = PlotlyScene(
+                x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
             )
-            target_with_orb_features = np.copy(target.cpu().numpy()) * 255
+            plot_transform(initial_scene.figure, np.eye(4), "cam frame", linelength=0.5, linewidth=10)
+            plot_transform(initial_scene.figure, T_world_cameraInit.cpu().numpy(), "T_world_camInit", linelength=0.5, linewidth=10)
+            plot_transform(initial_scene.figure, T_world_camera, "T_world_cam", linelength=0.5, linewidth=10)
 
-            target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
-            kps = orb.detect(target_with_orb_features_opencv,None)
+            visualizer.plot_scene(initial_scene, "initial")
+            visualizer.plot_rgb(target.cpu().numpy(), "target")
 
-            random.shuffle(kps)
-            select_coords = torch.zeros(N_rand, 2).long()
-            cv2.imwrite('color_img.jpg', target_with_orb_features_opencv)
+            if args.dbg_render_imgs:
+                with torch.no_grad():
+                    rgbs, _ = render_path(torch.unsqueeze(T_world_cameraInit, 0), hwf, args.chunk, render_kwargs_test)
+                rgb = rgbs[0]
+                visualizer.plot_rgb((rgb * 255).astype(np.uint8), "target_hat")
 
-            if len(kps) < N_rand:
-                print(f"less keypoints ({len(kps)}) than N_rand ({N_rand})")
+        '''
+        we go from our R6 parameterization of an offset to an SE3 transform
+        we can later premultiply T_0 by to get the new camera pose in world frame
+        '''
+        # sample a 6-vector of exponential coordinates
+        screw_exp = torch.normal(mean=torch.zeros(6), std=1e-6 * torch.ones(6)).to(device)
+        screw_exp.requires_grad = True
+
+        # sanity check the initial pose error
+        T_newWorld_oldWorld = screwToMatrixExp4_torch(screw_exp)
+        T_world_cameraHat = torch.mm(T_newWorld_oldWorld, T_world_cameraInit)
+        t_err, rot_err = check_pose_error(T_world_cameraHat.detach().cpu().numpy(), T_world_camera)
+        print(f"beginning: trans error: {t_err}, rot error: {rot_err}")
+
+        '''
+        optimizer
+        tl;dr we want to render rays of the camera pose and backpropagate the loss to update the
+        6 parameters of our se3 representation, the omega and nu
+        '''
+        initial_lr = 0.01
+        optimizer = torch.optim.Adam(params=[screw_exp], lr=initial_lr, betas=(0.9, 0.999))
+
+        '''
+        ~ main optimization loop ~
+        '''
+        N_rand = args.batchsize
+        global_step = 0
+        num_steps = args.num_steps
+        while global_step < num_steps:
+            # convert to se4
+            T_newWorld_oldWorld = screwToMatrixExp4_torch(screw_exp)
+            assert(TestIfSO3(T_newWorld_oldWorld.cpu().detach().numpy()[:3, :3])) # sanity check
+
+            # premultiply our estimate as specified in the paper
+            T_world_cameraHat = torch.mm(T_newWorld_oldWorld, T_world_cameraInit)
+            # print(f"T_world_cameraHat: \n{T_world_cameraHat}")
+
+            '''
+            sampling rays
+            a) random
+            b) interest point
+            c) interest region
+            '''
+            # generate all the rays through all the pixels
+            rays_o, rays_d = get_rays(H, W, focal, T_world_cameraHat[:3, :4]) # (H, W, 3), (H, W, 3)
+
+            if args.sample_rays == "random":
                 # randomly sample N_rand rays from all HxW possibilities
                 coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
                 coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
                 select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
                 select_coords = coords[select_inds].long()  # (N_rand, 2)
+            elif args.sample_rays == "feature_points":
+                # use orb features to pick keypoints
+                margin = 30
+                orb = cv2.ORB_create(
+                    nfeatures=int(N_rand * 2),       # max number of features to retain
+                    edgeThreshold=margin,            # size of border where features are not detected
+                    patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+                )
+                target_with_orb_features = np.copy(target.cpu().numpy()) * 255
 
-            for i in range(min(len(kps), N_rand)):
-                x = int(kps[i].pt[0])
-                y = int(kps[i].pt[1])
-                select_coords[i, 0] = y
-                select_coords[i, 1] = x
-                cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+                target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
+                kps = orb.detect(target_with_orb_features_opencv,None)
+
+                random.shuffle(kps)
+                select_coords = torch.zeros(N_rand, 2).long()
+                cv2.imwrite('color_img.jpg', target_with_orb_features_opencv)
+
+                if len(kps) < N_rand:
+                    print(f"less keypoints ({len(kps)}) than N_rand ({N_rand})")
+                    # randomly sample N_rand rays from all HxW possibilities
+                    coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+                    coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
+                    select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+                    select_coords = coords[select_inds].long()  # (N_rand, 2)
+
+                for i in range(min(len(kps), N_rand)):
+                    x = int(kps[i].pt[0])
+                    y = int(kps[i].pt[1])
+                    select_coords[i, 0] = y
+                    select_coords[i, 1] = x
+                    cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+
+                if args.dbg:
+                    vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
+                    visualizer.plot_rgb(vis_img, "target_with_orb_features")
+
+            elif args.sample_rays == "feature_regions":
+                # use orb features to pick keypoints
+                margin = 30
+                orb = cv2.ORB_create(
+                    nfeatures=int(N_rand*2),       # max number of features to retain
+                    edgeThreshold=margin,            # size of border where features are not detected
+                    patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+                )
+                target_with_orb_features = np.copy(target.cpu().numpy()) * 255
+                target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
+                kps = orb.detect(target_with_orb_features_opencv,None)
+
+                I = 3
+                kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
+
+                tmp = np.zeros((H, W)).astype("uint8")
+
+                for i,j in kps_ij:
+                    tmp[i,j] = 255
+                kern = np.ones((5,5))
+                for i in range(I):
+                    tmp = cv2.dilate(tmp, kern)
+
+                d_kps_ij = np.argwhere(tmp > 0)
+                np.random.shuffle(d_kps_ij)
+
+                select_coords = torch.from_numpy(d_kps_ij[0:N_rand])
+
+                for i in range(N_rand):
+                    y,x = kps_ij[i]
+                    cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+
+                if args.dbg:
+                    #target_with_orb_features_opencv[tmp>1,2] = 255
+                    vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
+                    visualizer.plot_rgb(vis_img,"target_with_regions")
+                    visualizer.plot_rgb(cv2.cvtColor(tmp, cv2.COLOR_GRAY2RGB),"target_with_regions2")
+            else:
+                assert(False) # define a way to sample rays
+
+            rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+            rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+            batch_rays = torch.stack([rays_o, rays_d], 0)
+            target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+
+            if args.use_disparity:
+                disp_s = target_disp[select_coords[:, 0], select_coords[:, 1]]
+            '''
+            render and compare
+            '''
+            rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
+                                            retraw=True,
+                                            **render_kwargs_test)
+
+            # plot the points we are visualizing
+            rendered_rays = np.zeros_like(target.cpu().numpy())
+            rgb_0_255 = rgb.detach().cpu().numpy() * 255
+            rgb_0_255 = rgb_0_255.astype(np.uint8)
+            rendered_rays[select_coords[:, 0].cpu().numpy(), select_coords[:, 1].cpu().numpy()] = rgb_0_255
 
             if args.dbg:
-                vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
-                visualizer.plot_rgb(vis_img, "target_with_orb_features")
+                visualizer.plot_rgb(rendered_rays, "rendered")
 
-        elif args.sample_rays == "feature_regions":
-            # use orb features to pick keypoints
-            margin = 30
-            orb = cv2.ORB_create(
-                nfeatures=int(N_rand*2),       # max number of features to retain
-                edgeThreshold=margin,            # size of border where features are not detected
-                patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
-            )
-            target_with_orb_features = np.copy(target.cpu().numpy()) * 255
-            target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
-            kps = orb.detect(target_with_orb_features_opencv,None)
+            optimizer.zero_grad()
 
-            I = 3
-            kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
+            if args.use_disparity:
+                target_s = torch.cat((target_s, disp_s.unsqueeze(1)), 1) # is this correct to include depth like this?
+                rgb = torch.cat((rgb, disp.unsqueeze(1)), 1)
+                
+            img_loss = img2mse(rgb, target_s)
+            loss = img_loss
 
-            tmp = np.zeros((H, W)).astype("uint8")
+            loss.backward()
+            optimizer.step()
 
-            for i,j in kps_ij:
-                tmp[i,j] = 255
-            kern = np.ones((5,5))
-            for i in range(I):
-                tmp = cv2.dilate(tmp, kern)
+            ###   update learning rate   ###
+            # The learning rate at step t is set as follow α_t = α_0 * 0.8^(t/100)
+            decay_rate = 0.6
+            decay_steps = 100
+            new_lrate = initial_lr * (decay_rate ** (global_step / decay_steps))
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = new_lrate
 
-            d_kps_ij = np.argwhere(tmp > 0)
-            np.random.shuffle(d_kps_ij)
+            '''
+            prints and visualizations
+            '''
+            if global_step % 10 == 0:
+                # current camera pose
+                T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
 
-            select_coords = torch.from_numpy(d_kps_ij[0:N_rand])
+                # check pose error
+                t_err, rot_err = check_pose_error(T_world_cameraHat_np, T_world_camera)
+                print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}")
 
-            for i in range(N_rand):
-                y,x = kps_ij[i]
-                cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+                with open(join(folder, f"{img_i:03d}.txt"), "a") as f:
+                    f.write(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}\n")
 
-            if args.dbg:
-                #target_with_orb_features_opencv[tmp>1,2] = 255
-                vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
-                visualizer.plot_rgb(vis_img,"target_with_regions")
-                visualizer.plot_rgb(cv2.cvtColor(tmp, cv2.COLOR_GRAY2RGB),"target_with_regions2")
-        else:
-            assert(False) # define a way to sample rays
+            if args.dbg and global_step % 10 == 0:
+                # current camera pose
+                T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
+                T_world_cameraHats = torch.from_numpy(np.expand_dims(T_world_cameraHat_np, 0)).to(device)
 
-        rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-        rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-        batch_rays = torch.stack([rays_o, rays_d], 0)
-        target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
-        disp_s = target_disp[select_coords[:, 0], select_coords[:, 1]]
-        '''
-        render and compare
-        '''
-        rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
-                                        retraw=True,
-                                        **render_kwargs_test)
+                optimization_scene = PlotlyScene(
+                    x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
+                )
+                plot_transform(optimization_scene.figure, np.eye(4), "camera frame", linelength=0.5, linewidth=10)
+                plot_transform(optimization_scene.figure, T_world_camera, "T_world_camera", linelength=0.5, linewidth=10)
+                plot_transform(optimization_scene.figure, T_world_cameraHat_np, "T_world_cameraHat", linelength=0.5, linewidth=10)
+                visualizer.plot_scene(optimization_scene, "optimization")
 
-        # plot the points we are visualizing
-        rendered_rays = np.zeros_like(target.cpu().numpy())
-        rgb_0_255 = rgb.detach().cpu().numpy() * 255
-        rgb_0_255 = rgb_0_255.astype(np.uint8)
-        rendered_rays[select_coords[:, 0].cpu().numpy(), select_coords[:, 1].cpu().numpy()] = rgb_0_255
+                # clear gpu cuda ram since forward pass takes up some vram
+                if args.dbg_render_imgs:
+                    if global_step % 50 == 0:
+                        del rgb
+                        del disp
+                        del acc
+                        del extras
+                        del loss
+                        del img_loss
+                        torch.cuda.empty_cache()
 
-        if args.dbg:
-            visualizer.plot_rgb(rendered_rays, "rendered")
+                        # render the whole image from the camera pose
+                        with torch.no_grad():
+                            rgbs, _ = render_path(T_world_cameraHats, hwf, args.chunk, render_kwargs_test)
+                        rgb = rgbs[0]
+                        visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
 
-        optimizer.zero_grad()
+            global_step += 1
+        del target
+        del pose
+        del T_world_cameraInit
+        del T_world_cameraHats
+        del screw_exp
+        del rgb
+        del disp
+        del acc
+        del extras
+        del loss
+        del img_loss
 
-        target_s = torch.cat((target_s, disp_s.unsqueeze(1)), 1) # is this correct to include depth like this?
-        rgb = torch.cat((rgb, disp.unsqueeze(1)), 1)
-        img_loss = img2mse(rgb, target_s)
-        loss = img_loss
-
-        loss.backward()
-        optimizer.step()
-
-        ###   update learning rate   ###
-        # The learning rate at step t is set as follow α_t = α_0 * 0.8^(t/100)
-        decay_rate = 0.6
-        decay_steps = 100
-        new_lrate = initial_lr * (decay_rate ** (global_step / decay_steps))
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = new_lrate
-
-        '''
-        prints and visualizations
-        '''
-        if global_step % 10 == 0:
-            # current camera pose
-            T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
-
-            # check pose error
-            t_err, rot_err = check_pose_error(T_world_cameraHat_np, T_world_camera)
-            print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}")
-
-        if args.dbg and global_step % 10 == 0:
-            # current camera pose
-            T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
-            T_world_cameraHats = torch.from_numpy(np.expand_dims(T_world_cameraHat_np, 0)).to(device)
-
-            optimization_scene = PlotlyScene(
-                x_range=(-5, 5), y_range=(-5, 5), z_range=(-5, 5)
-            )
-            plot_transform(optimization_scene.figure, np.eye(4), "camera frame", linelength=0.5, linewidth=10)
-            plot_transform(optimization_scene.figure, T_world_camera, "T_world_camera", linelength=0.5, linewidth=10)
-            plot_transform(optimization_scene.figure, T_world_cameraHat_np, "T_world_cameraHat", linelength=0.5, linewidth=10)
-            visualizer.plot_scene(optimization_scene, "optimization")
-
-            # clear gpu cuda ram since forward pass takes up some vram
-            if args.dbg_render_imgs:
-                if global_step % 50 == 0:
-                    del rgb
-                    del disp
-                    del acc
-                    del extras
-                    del loss
-                    del img_loss
-                    torch.cuda.empty_cache()
-
-                    # render the whole image from the camera pose
-                    with torch.no_grad():
-                        rgbs, _ = render_path(T_world_cameraHats, hwf, args.chunk, render_kwargs_test)
-                    rgb = rgbs[0]
-                    visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
-
-        global_step += 1
-
+        if args.use_disparity:
+            del target_disp
+            del rgbs_rgt
+            del disps_rgt
+            del Twc
+        torch.cuda.empty_cache()
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
