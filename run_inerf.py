@@ -144,10 +144,11 @@ def config_parser():
     parser.add_argument("--batchsize", type=int, default=512, help="Number of rays to use")
 
     # testing
-    parser.add_argument("--split", type=str, default="train", help="options are train, val, and test, default is train")
+    parser.add_argument("--split", type=str, default="benchmark", help="options are train, val, test, and benchmark, default is benchmark")
     parser.add_argument("--use_disparity", action="store_true", help="use disparity")
     #parser.add_argument("--use_disparity_only", action="store_true", help="use disparity ONLY") #todo
-    parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
+    # lets always save results?
+    # parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
 
     return parser
 
@@ -189,6 +190,12 @@ def train():
         with open(f, 'w') as file:
             file.write(open(args.config, 'r').read())
 
+    if args.use_disparity:
+        folder = os.path.join(basedir, expname, f"results_with_disparity_bs{args.batchsize}_{args.sample_rays}")
+    else:
+        folder = os.path.join(basedir, expname, f"results_bs{args.batchsize}_{args.sample_rays}")
+    os.makedirs(folder, exist_ok=True)
+
     # Create nerf model
     render_kwargs_train, render_kwargs_test, _, _, _ = create_nerf(args)
 
@@ -199,9 +206,6 @@ def train():
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
-    '''
-    let's pick a random image that we want to estimate the pose of
-    '''
     indxs = dict()
     indxs["train"] = i_train
     indxs["val"] = i_val
@@ -210,25 +214,35 @@ def train():
     print("Num images: ", len(indxs[args.split]))
     print("Use disparity? ", args.use_disparity)
 
-    if args.save_results:
-        obj_name = Path(args.config).stem
-        if args.use_disparity:
-            folder = join("results_with_disparity_bs_"+str(args.batchsize),obj_name)
-        else:
-            folder = join("results_bs_"+str(args.batchsize),obj_name)
+    if args.split == "benchmark":
+        num_test_images = 5
+        num_poses_per_test_image = 5
+        select_idxs = np.random.choice(i_test, size=num_test_images)
+        idxs_with_num_poses = [[idx for _ in range(num_poses_per_test_image)] for idx in select_idxs]
+        img_idxs =  [idx for idx_list in idxs_with_num_poses for idx in idx_list]
+        print(f"Benchmark mode: evaluating {num_poses_per_test_image} poses on each of {num_test_images} test images")
+        print(f"{img_idxs}")
+    else:
+        img_idxs = indxs[args.split]
 
-        if not isdir(folder): makedirs(folder)
+    '''
+    we will store all the results in a len(img_idxs) x num_iterations x 2 array
+    the last index will be either for translation (0) or rotation (1) error in meters and degrees respectively
 
-    for img_i in indxs[args.split]:
-        img_i = np.random.choice(i_train)
+    we can post process these together for all the synthetic or llff data and plot the curves as done in fig 6 of the paper
+    '''
+    results_np = np.zeros((len(img_idxs), args.num_steps, 2))
+    print(f"results dict will be stored in a {results_np.shape} np array!")
+
+    '''
+    ------- begin -------
+    '''
+    for results_idx, img_i in enumerate(img_idxs):
         target = images[img_i]
         target = torch.from_numpy(target).float().to(device)
 
         pose = poses[img_i, :3,:4]
         T_world_camera = poses[img_i, :4,:4] # camera pose in world frame
-
-        print(f"Image: {img_i}")
-        print(f"GT camera pose: {pose}")
 
         if args.use_disparity:
             with torch.no_grad():
@@ -241,7 +255,9 @@ def train():
             visualizer.plot_rgb(cv2.cvtColor((np.copy(disp_rgt)*255).astype("float32"), cv2.COLOR_GRAY2RGB),"disparity")
             target_disp = torch.from_numpy(disp_rgt).float().to(device)
 
-        # random init
+        '''
+        random pose offset init
+        '''
         if args.dataset_type == 'llff':
             t_rng = 0.1
             r_rng = 40
@@ -369,15 +385,23 @@ def train():
             for param_group in optimizer.param_groups:
                 param_group['lr'] = new_lrate
 
+
+            '''
+            calculate the translational and rotational error
+            '''
+            # current camera pose
+            T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
+
+            # check pose error
+            t_err, rot_err = check_pose_error(T_world_cameraHat_np, T_world_camera)
+
+            results_np[results_idx, global_step, 0] = t_err
+            results_np[results_idx, global_step, 1] = rot_err
+
             '''
             prints and visualizations
             '''
             if global_step % 10 == 0:
-                # current camera pose
-                T_world_cameraHat_np = T_world_cameraHat.detach().cpu().numpy()
-
-                # check pose error
-                t_err, rot_err = check_pose_error(T_world_cameraHat_np, T_world_camera)
                 print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy():0.4f}, trans error: {t_err:0.4f}, rot error: {rot_err:0.4f}")
 
                 if args.save_results:
@@ -415,6 +439,7 @@ def train():
                         visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
 
             global_step += 1
+
         del target
         del pose
         del T_world_cameraInit
@@ -433,6 +458,8 @@ def train():
             del disps_rgt
             del Twc
         torch.cuda.empty_cache()
+
+    np.save(f"", results_np)
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
