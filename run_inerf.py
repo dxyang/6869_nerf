@@ -211,9 +211,6 @@ def train():
     indxs["val"] = i_val
     indxs["test"] = i_test
 
-    print("Num images: ", len(indxs[args.split]))
-    print("Use disparity? ", args.use_disparity)
-
     if args.split == "benchmark":
         num_test_images = 5
         num_poses_per_test_image = 5
@@ -224,6 +221,9 @@ def train():
         print(f"{img_idxs}")
     else:
         img_idxs = indxs[args.split]
+
+    print("Num images: ", len(img_idxs))
+    print("Use disparity? ", args.use_disparity)
 
     '''
     we will store all the results in a len(img_idxs) x num_iterations x 2 array
