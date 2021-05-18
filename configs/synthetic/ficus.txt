@@ -1,6 +1,6 @@
-expname = lego_test
+expname = blender_paper_ficus
 basedir = ./nerf-pytorch/logs
-datadir = ./nerf-pytorch/data/nerf_synthetic/lego
+datadir = ./nerf-pytorch/data/nerf_synthetic/ficus
 dataset_type = blender
 
 no_batching = True
@@ -17,7 +17,3 @@ precrop_iters = 500
 precrop_frac = 0.5
 
 half_res = True
-
-sample_rays = feature_regions
-dbg = False
-dbg_render_imgs = False
