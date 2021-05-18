@@ -147,8 +147,8 @@ def config_parser():
     parser.add_argument("--split", type=str, default="benchmark", help="options are train, val, test, and benchmark, default is benchmark")
     parser.add_argument("--use_disparity", action="store_true", help="use disparity")
     #parser.add_argument("--use_disparity_only", action="store_true", help="use disparity ONLY") #todo
-    # lets always save results?
-    # parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
+    # lets always save results? at leasty the numpy is at the moment, leaving this as is
+    parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
 
     return parser
 
@@ -339,7 +339,7 @@ def train():
             rays_o, rays_d = get_rays(H, W, focal, T_world_cameraHat[:3, :4]) # (H, W, 3), (H, W, 3)
 
             # sample rays to render using args.sample_rays strategy
-            select_coords = sample_rays_to_render(args, target, N_rand, H, W, visualizer)
+            select_coords = sample_rays_to_render(args, target, N_rand, H, W, visualizer if args.dbg else None)
             rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
             rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
             batch_rays = torch.stack([rays_o, rays_d], 0)
