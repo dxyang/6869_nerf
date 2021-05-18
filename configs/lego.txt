@@ -18,6 +18,9 @@ precrop_frac = 0.5
 
 half_res = True
 
+# ------ config above is from the defaults -----
 sample_rays = feature_regions
+batchsize = 512
+
 dbg = False
 dbg_render_imgs = False

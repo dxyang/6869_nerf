@@ -1,5 +1,176 @@
 import math
+import os
+import random
+import sys
+
+import cv2
 import numpy as np
+import torch
+
+cwd = os.getcwd()
+sys.path.append(f"{cwd}/nerf-pytorch")
+from load_llff import load_llff_data
+from load_deepvoxels import load_dv_data
+from load_blender import load_blender_data
+
+def sample_rays_to_render(args, target, N_rand, H, W, visualizer=None):
+    '''
+    sampling rays
+    a) random
+    b) interest point
+    c) interest region
+    '''
+    if args.sample_rays == "random":
+        # randomly sample N_rand rays from all HxW possibilities
+        coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+        coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
+        select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+        select_coords = coords[select_inds].long()  # (N_rand, 2)
+    elif args.sample_rays == "feature_points":
+        # use orb features to pick keypoints
+        margin = 30
+        orb = cv2.ORB_create(
+            nfeatures=int(N_rand * 2),       # max number of features to retain
+            edgeThreshold=margin,            # size of border where features are not detected
+            patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+        )
+        target_with_orb_features = np.copy(target.cpu().numpy()) * 255
+
+        target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
+        kps = orb.detect(target_with_orb_features_opencv,None)
+
+        random.shuffle(kps)
+        select_coords = torch.zeros(N_rand, 2).long()
+        cv2.imwrite('color_img.jpg', target_with_orb_features_opencv)
+
+        if len(kps) < N_rand:
+            print(f"less keypoints ({len(kps)}) than N_rand ({N_rand})")
+            # randomly sample N_rand rays from all HxW possibilities
+            coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+            coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
+            select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
+            select_coords = coords[select_inds].long()  # (N_rand, 2)
+
+        for i in range(min(len(kps), N_rand)):
+            x = int(kps[i].pt[0])
+            y = int(kps[i].pt[1])
+            select_coords[i, 0] = y
+            select_coords[i, 1] = x
+            cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+
+        if args.dbg:
+            vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
+            visualizer.plot_rgb(vis_img, "target_with_orb_features")
+
+    elif args.sample_rays == "feature_regions":
+        # use orb features to pick keypoints
+        margin = 30
+        orb = cv2.ORB_create(
+            nfeatures=int(N_rand*2),       # max number of features to retain
+            edgeThreshold=margin,            # size of border where features are not detected
+            patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
+        )
+        target_with_orb_features = np.copy(target.cpu().numpy()) * 255
+        target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
+        kps = orb.detect(target_with_orb_features_opencv,None)
+
+        I = 3
+        kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
+
+        tmp = np.zeros((H, W)).astype("uint8")
+
+        for i,j in kps_ij:
+            tmp[i,j] = 255
+        kern = np.ones((5,5))
+        for i in range(I):
+            tmp = cv2.dilate(tmp, kern)
+
+        d_kps_ij = np.argwhere(tmp > 0)
+        np.random.shuffle(d_kps_ij)
+
+        select_coords = torch.from_numpy(d_kps_ij[0:N_rand])
+
+        for i in range(N_rand):
+            y,x = kps_ij[i]
+            cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+
+        if args.dbg:
+            #target_with_orb_features_opencv[tmp>1,2] = 255
+            vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
+            visualizer.plot_rgb(vis_img,"target_with_regions")
+            visualizer.plot_rgb(cv2.cvtColor(tmp, cv2.COLOR_GRAY2RGB),"target_with_regions2")
+    else:
+        assert(False) # define a way to sample rays
+
+    return select_coords
+
+def load_data(args):
+    if args.dataset_type == 'llff':
+        images, poses, bds, render_poses, i_test = load_llff_data(args.datadir, args.factor,
+                                                                  recenter=True, bd_factor=.75,
+                                                                  spherify=args.spherify)
+        hwf = poses[0,:3,-1]
+        poses = poses[:,:3,:4]
+        print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
+        if not isinstance(i_test, list):
+            i_test = [i_test]
+
+        if args.llffhold > 0:
+            print('Auto LLFF holdout,', args.llffhold)
+            i_test = np.arange(images.shape[0])[::args.llffhold]
+
+        i_val = i_test
+        i_train = np.array([i for i in np.arange(int(images.shape[0])) if
+                        (i not in i_test and i not in i_val)])
+
+        print('DEFINING BOUNDS')
+        if args.no_ndc:
+            near = np.ndarray.min(bds) * .9
+            far = np.ndarray.max(bds) * 1.
+
+        else:
+            near = 0.
+            far = 1.
+        print('NEAR FAR', near, far)
+
+        # added by dxy - we like poses in 4x4
+        bottom = np.expand_dims(np.expand_dims(np.array([0, 0, 0, 1.0]), axis=0), axis=0) #1x1x4
+        bottom_batch = np.concatenate([bottom for _ in range(20)])
+        poses = np.hstack((poses, bottom_batch))
+
+    elif args.dataset_type == 'blender':
+        images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
+        print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
+        i_train, i_val, i_test = i_split
+
+        near = 2.
+        far = 6.
+
+        if args.white_bkgd:
+            images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
+        else:
+            images = images[...,:3]
+
+    elif args.dataset_type == 'deepvoxels':
+
+        images, poses, render_poses, hwf, i_split = load_dv_data(scene=args.shape,
+                                                                 basedir=args.datadir,
+                                                                 testskip=args.testskip)
+
+        print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
+        i_train, i_val, i_test = i_split
+
+        hemi_R = np.mean(np.linalg.norm(poses[:,:3,-1], axis=-1))
+        near = hemi_R-1.
+        far = hemi_R+1.
+
+    else:
+        print('Unknown dataset type', args.dataset_type, 'exiting')
+        assert(False)
+
+    return images, poses, render_poses, hwf, near, far, i_train, i_val, i_test
+
+
 
 def check_pose_error(That_A_B: np.array, T_A_B: np.array):
     T_Ahat_A = np.matmul(That_A_B, np.linalg.inv(T_A_B))
