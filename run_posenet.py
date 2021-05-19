@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 from run_inerf_helpers import screwToMatrixExp4_torch, TestIfSO3
 
 # some viz tools
-from utils import check_pose_error, sample_unit_sphere, rotation_matrix_from_axis_angle
+from utils import check_pose_error, load_data, sample_unit_sphere, rotation_matrix_from_axis_angle
 from vis import VisdomVisualizer, PlotlyScene, plot_transform
 
 curr_path = os.path.dirname(os.path.abspath(__file__))
@@ -48,7 +48,8 @@ class ImgPoseDataset(Dataset):
         return len(self.imgs)
 
     def __getitem__(self,idx):
-        img = self.imgs[idx].T
+        # self.imgs[idx] is HWC
+        img = self.imgs[idx].permute(2, 0, 1)
         pose = self.poses[idx]
         return (img, pose)
 
@@ -189,9 +190,16 @@ def config_parser():
     parser.add_argument("--predict_r_12", action='store_true',
                         help='mobile net pose output dimension')
 
-    # mobilenet output space r12 or r6
+    # just pose loss means big batches and no image rendering loss
     parser.add_argument("--use_just_pose_loss", action='store_true',
                         help='pose loss only, no image rendering loss')
+
+    # mobilenet output space r12 or r6
+    parser.add_argument("--load_model", type=str, default=None,
+                        help='path to model file to load. make sure compatible with mobilenet config')
+
+    # these are from inerf but don't set use these in this file!
+    parser.add_argument("--batchsize", type=int, default=512, help="Number of rays to use")
 
     return parser
 
@@ -207,85 +215,18 @@ def train():
         visualizer = VisdomVisualizer(vis, "inerf")
 
     # Load data
-    if args.dataset_type == 'llff':
-        images, poses, bds, render_poses, i_test = load_llff_data(args.datadir, args.factor,
-                                                                  recenter=True, bd_factor=.75,
-                                                                  spherify=args.spherify)
-        hwf = poses[0,:3,-1]
-        poses = poses[:,:3,:4]
-        print('Loaded llff', images.shape, render_poses.shape, hwf, args.datadir)
-        if not isinstance(i_test, list):
-            i_test = [i_test]
-
-        if args.llffhold > 0:
-            print('Auto LLFF holdout,', args.llffhold)
-            i_test = np.arange(images.shape[0])[::args.llffhold]
-
-        i_val = i_test
-        i_train = np.array([i for i in np.arange(int(images.shape[0])) if
-                        (i not in i_test and i not in i_val)])
-
-        print('DEFINING BOUNDS')
-        if args.no_ndc:
-            near = np.ndarray.min(bds) * .9
-            far = np.ndarray.max(bds) * 1.
-
-        else:
-            near = 0.
-            far = 1.
-        print('NEAR FAR', near, far)
-
-    elif args.dataset_type == 'blender':
-        images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
-        print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
-        i_train, i_val, i_test = i_split
-
-        near = 2.
-        far = 6.
-
-        if args.white_bkgd:
-            images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
-        else:
-            images = images[...,:3]
-
-    elif args.dataset_type == 'deepvoxels':
-
-        images, poses, render_poses, hwf, i_split = load_dv_data(scene=args.shape,
-                                                                 basedir=args.datadir,
-                                                                 testskip=args.testskip)
-
-        print('Loaded deepvoxels', images.shape, render_poses.shape, hwf, args.datadir)
-        i_train, i_val, i_test = i_split
-
-        hemi_R = np.mean(np.linalg.norm(poses[:,:3,-1], axis=-1))
-        near = hemi_R-1.
-        far = hemi_R+1.
-
-    else:
-        print('Unknown dataset type', args.dataset_type, 'exiting')
-        return
+    images, poses, render_poses, hwf, near, far, i_train, i_val, i_test = load_data(args)
 
     # Cast intrinsics to right types
     H, W, focal = hwf
     H, W = int(H), int(W)
     hwf = [H, W, focal]
 
-    if args.render_test:
-        render_poses = np.array(poses[i_test])
-
     # Create log dir and copy the config file
     basedir = args.basedir
     expname = args.expname
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
-    f = os.path.join(basedir, expname, 'args.txt')
-    with open(f, 'w') as file:
-        for arg in sorted(vars(args)):
-            attr = getattr(args, arg)
-            file.write('{} = {}\n'.format(arg, attr))
-    if args.config is not None:
-        f = os.path.join(basedir, expname, 'config.txt')
-        with open(f, 'w') as file:
-            file.write(open(args.config, 'r').read())
+    # results_folder = os.path.join(basedir, expname, 'args.txt')
 
     # Create nerf model
     render_kwargs_train, render_kwargs_test, _, _, _ = create_nerf(args)
@@ -309,6 +250,11 @@ def train():
     mobilenet_v2.to(device)
     set_bn_grad_recursive(mobilenet_v2, req_grad = False)
 
+    if args.load_model is not None:
+        print(f"---------------Loaded model from {args.load_model}")
+        mobilenet_v2.load_state_dict(torch.load(args.load_model))
+
+
     # data wrangling
     poses = poses[:,:3,:4]
     images = torch.Tensor(images.astype(np.float32))
@@ -327,7 +273,7 @@ def train():
         lambda2 = 1.0 - lambda1 #gt loss
         bs = 32
     else:
-        N_rand = 1024 + 256 # num rays to render
+        N_rand = 1024 # num rays to render
         lambda1 = 0.3 # photo
         lambda2 = 0.7 # pose
         bs = 1
@@ -356,6 +302,7 @@ def train():
     dataloaders = dict()
     dataloaders["train"] = train_loader
     dataloaders["val"] = val_loader
+    dataloaders["test"] = test_loader
 
     optimizer = torch.optim.Adam(params=mobilenet_v2.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
@@ -363,21 +310,29 @@ def train():
     '''
     training loop
     '''
-    mobilenet_v2.train()
+    if args.load_model:
+        mobilenet_v2.eval()
+    else:
+        mobilenet_v2.train()
     global_step = 0
     for epoch in range(num_epochs):
         print("="*10)
-        for phase in ["train","val"]:
+        if epoch % 100 == 0 and epoch > 1:
+            phases = ["train", "test"]
+        else:
+            phases = ["train"]
+        for phase in phases:
             running_loss = 0.0
             running_image_loss = 0.0
             running_pose_loss = 0.0
             running_trans_error = 0.0
             running_rot_error = 0.0
 
-            if phase == "train":
-                mobilenet_v2.train()
-            else:
-                mobilenet_v2.eval()
+            if not args.load_model:
+                if phase == "train":
+                    mobilenet_v2.train()
+                else:
+                    mobilenet_v2.eval()
 
             for inputs, pose in tqdm(dataloaders[phase]):
                 optimizer.zero_grad()
@@ -387,7 +342,7 @@ def train():
                 gt_pose = pose.to(device)
                 actual_bs = inputs.size()[0]
 
-                with torch.set_grad_enabled(phase == "train"):
+                with torch.set_grad_enabled(phase == "train" and not args.load_model):
 
                     # forward pass through network
                     output = mobilenet_v2(inputs)
@@ -420,7 +375,7 @@ def train():
                         for bs_idx in range(actual_bs):
                             # one img at a time within this batch
                             pose_hat_oi = pose_svd_hat[bs_idx]
-                            img_oi = inputs[bs_idx].permute(1, 2, 0) # HWC
+                            img_oi = inputs[bs_idx]
 
                             rays_o, rays_d = get_rays(H, W, focal, pose_hat_oi) # (H, W, 3), (H, W, 3)
 
@@ -469,7 +424,7 @@ def train():
                         loss_photo = torch.norm(batch_rgb_hats - batch_rgb_targets)
 
                     loss = lambda1*loss_photo + lambda2*loss_gt
-                    if phase == "train":
+                    if phase == "train" and not args.load_model:
                         loss.backward()
                         optimizer.step()
 
@@ -500,7 +455,8 @@ def train():
             ))
 
         # update learning rate
-        scheduler.step()
+        if not args.load_model:
+            scheduler.step()
 
         # save model
         if epoch%10 == 0 and epoch > 0:
