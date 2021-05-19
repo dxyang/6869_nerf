@@ -238,6 +238,7 @@ def train():
     ------- begin -------
     '''
     for results_idx, img_i in enumerate(img_idxs):
+        print(f"[{results_idx}] / [{len(img_idxs)}] ================================")
         target = images[img_i]
         target = torch.from_numpy(target).float().to(device)
 
