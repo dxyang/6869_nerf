@@ -142,6 +142,7 @@ def config_parser():
                         help='how to sample rays')
     parser.add_argument("--num_steps", type=int, default=300, help="Number of iterations to run")
     parser.add_argument("--batchsize", type=int, default=512, help="Number of rays to use")
+    parser.add_argument("--dilation", type=int, default=5, help="Amount to dilate rays by for region sampling (only used in region sampling)")
 
     # testing
     parser.add_argument("--split", type=str, default="benchmark", help="options are train, val, test, and benchmark, default is benchmark")

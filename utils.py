@@ -74,7 +74,7 @@ def sample_rays_to_render(args, target, N_rand, H, W, visualizer=None):
         target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
         kps = orb.detect(target_with_orb_features_opencv,None)
 
-        I = 3
+        I = args.dilation
         kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
 
         tmp = np.zeros((H, W)).astype("uint8")
