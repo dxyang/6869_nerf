@@ -48,7 +48,7 @@ class ImgPoseDataset(Dataset):
         return len(self.imgs)
 
     def __getitem__(self,idx):
-        # self.imgs[idx] is HWC
+        # self.imgs[idx] is HWC so let's return CHW
         img = self.imgs[idx].permute(2, 0, 1)
         pose = self.poses[idx]
         return (img, pose)
@@ -375,7 +375,7 @@ def train():
                         for bs_idx in range(actual_bs):
                             # one img at a time within this batch
                             pose_hat_oi = pose_svd_hat[bs_idx]
-                            img_oi = inputs[bs_idx]
+                            img_oi = inputs[bs_idx] # this is in CHW
 
                             rays_o, rays_d = get_rays(H, W, focal, pose_hat_oi) # (H, W, 3), (H, W, 3)
 
@@ -386,9 +386,17 @@ def train():
                                 edgeThreshold=margin,            # size of border where features are not detected
                                 patchSize=margin                 # size of patch used by the oriented BRIEF descriptor
                             )
-                            target_with_orb_features = np.copy(img_oi.cpu().numpy()) * 255
+                            target_with_orb_features = np.transpose(np.copy(img_oi.cpu().numpy()) * 255, (1, 2, 0))
                             target_with_orb_features_opencv = cv2.cvtColor(target_with_orb_features.astype(np.uint8), cv2.COLOR_RGB2BGR)
                             kps = orb.detect(target_with_orb_features_opencv,None)
+
+                            # sanity check the image comes out ok
+                            # for i in range(min(len(kps), N_rand)):
+                            #     x = int(kps[i].pt[0])
+                            #     y = int(kps[i].pt[1])
+                            #     cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
+                            # cv2.imwrite("target_with_orb_features_opencv.jpg", target_with_orb_features_opencv)
+                            # import pdb; pdb.set_trace()
 
                             I = 3
                             kps_ij = [[int(kp.pt[1]), int(kp.pt[0])] for kp in kps]
