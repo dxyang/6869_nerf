@@ -290,8 +290,10 @@ def train():
             plot_transform(initial_scene.figure, T_world_cameraInit.cpu().numpy(), "T_world_camInit", linelength=0.5, linewidth=10)
             plot_transform(initial_scene.figure, T_world_camera, "T_world_cam", linelength=0.5, linewidth=10)
 
-            visualizer.plot_scene(initial_scene, "initial")
+            #visualizer.plot_scene(initial_scene, "initial")
             visualizer.plot_rgb(target.cpu().numpy(), "target")
+            #target_img = (target.cpu().numpy()*255).astype(np.uint8)
+            target_img = target.cpu().numpy()*255
 
             if args.dbg_render_imgs:
                 with torch.no_grad():
@@ -388,7 +390,6 @@ def train():
             for param_group in optimizer.param_groups:
                 param_group['lr'] = new_lrate
 
-
             '''
             calculate the translational and rotational error
             '''
@@ -408,7 +409,7 @@ def train():
                 print(f"iteration {global_step}, loss: {loss.cpu().detach().numpy():0.4f}, trans error: {t_err:0.4f}, rot error: {rot_err:0.4f}")
 
                 if args.save_results:
-                    with open(join(folder, f"{img_i:03d}.txt"), "a") as f:
+                    with open(join(results_folder, f"{img_i:03d}.txt"), "a") as f:
                         f.write(f"iteration {global_step}, loss: {loss.cpu().detach().numpy()}, trans error: {t_err}, rot error: {rot_err}\n")
 
             if args.dbg and global_step % 10 == 0:
@@ -440,6 +441,14 @@ def train():
                             rgbs, _ = render_path(T_world_cameraHats, hwf, args.chunk, render_kwargs_test)
                         rgb = rgbs[0]
                         visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
+
+                        if args.save_results:
+                            stitched = np.hstack((target_img.astype(np.uint8),(rgb * 255).astype(np.uint8), (rendered_rays.astype(np.uint8))))
+                            cv2.imwrite(join(results_folder,f"{img_i}_{global_step}.jpg"),stitched)
+
+                            alpha = (target_img*0.7 + (rgb*255)*0.3).astype(np.uint8)
+                            cv2.imwrite(join(results_folder,f"{img_i}_{global_step}_alpha.jpg"),alpha)
+
 
             global_step += 1
         end = time.time()
