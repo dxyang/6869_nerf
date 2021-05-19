@@ -90,11 +90,10 @@ def sample_rays_to_render(args, target, N_rand, H, W, visualizer=None):
 
         select_coords = torch.from_numpy(d_kps_ij[0:N_rand])
 
-        for i in range(N_rand):
-            y,x = kps_ij[i]
-            cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
-
         if args.dbg:
+            for i in range(min(N_rand, len(kps_ij))):
+                y,x = kps_ij[i]
+                cv2.circle(target_with_orb_features_opencv,(x,y), 5, (0, 0, 255), thickness=1)
             #target_with_orb_features_opencv[tmp>1,2] = 255
             vis_img = cv2.cvtColor(target_with_orb_features_opencv.astype(np.uint8), cv2.COLOR_BGR2RGB)
             visualizer.plot_rgb(vis_img,"target_with_regions")
