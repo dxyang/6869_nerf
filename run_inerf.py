@@ -148,8 +148,8 @@ def config_parser():
     parser.add_argument("--split", type=str, default="benchmark", help="options are train, val, test, and benchmark, default is benchmark")
     parser.add_argument("--use_disparity", action="store_true", help="use disparity")
     #parser.add_argument("--use_disparity_only", action="store_true", help="use disparity ONLY") #todo
-    # lets always save results?
-    # parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
+    # lets always save results? at leasty the numpy is at the moment, leaving this as is
+    parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
 
     return parser
 
@@ -212,9 +212,6 @@ def train():
     indxs["val"] = i_val
     indxs["test"] = i_test
 
-    print("Num images: ", len(indxs[args.split]))
-    print("Use disparity? ", args.use_disparity)
-
     if args.split == "benchmark":
         num_test_images = 5
         num_poses_per_test_image = 5
@@ -225,6 +222,9 @@ def train():
         print(f"{img_idxs}")
     else:
         img_idxs = indxs[args.split]
+
+    print("Num images: ", len(img_idxs))
+    print("Use disparity? ", args.use_disparity)
 
     '''
     we will store all the results in a len(img_idxs) x num_iterations x 2 array
@@ -341,7 +341,7 @@ def train():
             rays_o, rays_d = get_rays(H, W, focal, T_world_cameraHat[:3, :4]) # (H, W, 3), (H, W, 3)
 
             # sample rays to render using args.sample_rays strategy
-            select_coords = sample_rays_to_render(args, target, N_rand, H, W, visualizer)
+            select_coords = sample_rays_to_render(args, target, N_rand, H, W, visualizer if args.dbg else None)
             rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
             rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
             batch_rays = torch.stack([rays_o, rays_d], 0)
