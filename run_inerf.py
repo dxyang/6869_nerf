@@ -21,6 +21,12 @@ from run_nerf import render, render_path, create_nerf
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def img2mse_safe(x,y):
+    xf = x.flatten()
+    yf = y.flatten()
+    nnans = ~torch.isnan(xf-yf)
+    return torch.mean((xf[nnans]-yf[nnans])**2)
+    
 def config_parser():
 
     import configargparse
@@ -171,6 +177,9 @@ def train():
     # Load data
     images, poses, render_poses, hwf, near, far, i_train, i_val, i_test = load_data(args)
 
+    near = torch.Tensor([near])
+    far = torch.Tensor([far])
+    
     # Cast intrinsics to right types
     H, W, focal = hwf
     H, W = int(H), int(W)
@@ -251,9 +260,17 @@ def train():
 
             rgb_rgt = rgbs_rgt[0]
             disp_rgt = disps_rgt[0]
-            visualizer.plot_rgb((rgb_rgt * 255).astype(np.uint8), "rgb_rgt")
-            visualizer.plot_rgb(cv2.cvtColor((np.copy(disp_rgt)*255).astype("float32"), cv2.COLOR_GRAY2RGB),"disparity")
             target_disp = torch.from_numpy(disp_rgt).float().to(device)
+
+            target_disp = torch.nan_to_num(target_disp, 1/6)
+            target_disp = torch.minimum(target_disp, torch.Tensor(1/near))
+            target_disp = torch.maximum(target_disp, torch.Tensor(1/far))
+            assert(~torch.isnan(target_disp).any())
+            
+            if args.dbg_render_imgs:
+                visualizer.plot_rgb((rgb_rgt * 255).astype(np.uint8), "rgb_rgt")
+                visualizer.plot_rgb(cv2.cvtColor((np.copy(disp_rgt)*255).astype("float32"), cv2.COLOR_GRAY2RGB),"disparity")
+            
 
         '''
         random pose offset init
@@ -262,8 +279,8 @@ def train():
             t_rng = 0.1
             r_rng = 40
         elif args.dataset_type == 'blender':
-            t_rng = 0.2
-            r_rng = 40
+            t_rng = 0
+            r_rng = 1
         random_axis = sample_unit_sphere()
         random_angle_rads = np.deg2rad(np.random.uniform(-r_rng, r_rng))
         random_translation = np.random.uniform(-t_rng, t_rng, 3)
@@ -357,7 +374,12 @@ def train():
             rgb, disp, acc, extras = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
                                             retraw=True,
                                             **render_kwargs_test)
-
+            # disp to depth and clamp
+            #disp = torch.nan_to_num(disp, 1/6)
+            #disp = torch.minimum(disp, torch.Tensor(1/near))
+            #disp = torch.maximum(disp, torch.Tensor(1/far))
+            #assert(~torch.isnan(disp).any())
+            
             # plot the points we are visualizing
             rendered_rays = np.zeros_like(target.cpu().numpy())
             rgb_0_255 = rgb.detach().cpu().numpy() * 255
@@ -373,10 +395,14 @@ def train():
                 target_s = torch.cat((target_s, disp_s.unsqueeze(1)), 1) # is this correct to include depth like this?
                 rgb = torch.cat((rgb, disp.unsqueeze(1)), 1)
 
-            img_loss = img2mse(rgb, target_s)
+            if args.use_disparity:
+                img_loss = img2mse_safe(rgb, target_s)
+            else:
+                img_loss = img2mse(rgb, target_s)
             loss = img_loss
 
             loss.backward()
+
             optimizer.step()
 
             ###   update learning rate   ###
@@ -386,7 +412,6 @@ def train():
             new_lrate = initial_lr * (decay_rate ** (global_step / decay_steps))
             for param_group in optimizer.param_groups:
                 param_group['lr'] = new_lrate
-
 
             '''
             calculate the translational and rotational error
@@ -438,7 +463,7 @@ def train():
                         with torch.no_grad():
                             rgbs, _ = render_path(T_world_cameraHats, hwf, args.chunk, render_kwargs_test)
                         rgb = rgbs[0]
-                        visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
+                        visualizer.plot_rgb((rgb * 255).astype(np.uint8), title="rgb_hat")
 
             global_step += 1
         end = time.time()
