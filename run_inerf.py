@@ -324,7 +324,7 @@ def train():
         '''
         ~ main optimization loop ~
         '''
-        N_rand = args.N_rand
+        N_rand = args.batchsize
         print(f"sampling {N_rand} rays per iteration")
 
         global_step = 0
