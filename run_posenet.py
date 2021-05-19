@@ -417,7 +417,7 @@ def train():
                             rays_o = rays_o[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
                             rays_d = rays_d[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
                             batch_rays = torch.stack([rays_o, rays_d], 0)
-                            target_s = img_oi[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
+                            target_s = img_oi[:, select_coords[:, 0], select_coords[:, 1]].T  # (N_rand, 3)
 
                             # render
                             rgb_hat, _, _, _ = render(H, W, focal, chunk=args.chunk, rays=batch_rays,
