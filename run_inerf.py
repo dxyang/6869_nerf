@@ -1,7 +1,6 @@
 import os, sys
-from os.path import join, isdir
-from os import makedirs
-from pathlib import Path
+from os.path import join
+import time
 
 import cv2
 import numpy as np
@@ -192,10 +191,10 @@ def train():
             file.write(open(args.config, 'r').read())
 
     if args.use_disparity:
-        folder = os.path.join(basedir, expname, f"results_with_disparity_bs{args.batchsize}_{args.sample_rays}")
+        results_folder = os.path.join(basedir, expname, f"results_with_disparity_bs{args.batchsize}_{args.sample_rays}")
     else:
-        folder = os.path.join(basedir, expname, f"results_bs{args.batchsize}_{args.sample_rays}")
-    os.makedirs(folder, exist_ok=True)
+        results_folder = os.path.join(basedir, expname, f"results_bs{args.batchsize}_{args.sample_rays}")
+    os.makedirs(results_folder, exist_ok=True)
 
     # Create nerf model
     render_kwargs_train, render_kwargs_test, _, _, _ = create_nerf(args)
@@ -329,6 +328,7 @@ def train():
 
         global_step = 0
         num_steps = args.num_steps
+        start = time.time()
         while global_step < num_steps:
             # convert to se4
             T_newWorld_oldWorld = screwToMatrixExp4_torch(screw_exp)
@@ -441,11 +441,15 @@ def train():
                         visualizer.plot_rgb((rgb * 255).astype(np.uint8), "rgb_hat")
 
             global_step += 1
+        end = time.time()
+        print(f"{start - end} seconds")
+
 
         del target
         del pose
         del T_world_cameraInit
-        del T_world_cameraHats
+        if args.dbg:
+            del T_world_cameraHats
         del screw_exp
         del rgb
         del disp
@@ -461,7 +465,7 @@ def train():
             del Twc
         torch.cuda.empty_cache()
 
-    np.save(f"", results_np)
+    np.save(f"{results_folder}/results.npy", results_np)
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
