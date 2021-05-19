@@ -465,7 +465,9 @@ def train():
             del Twc
         torch.cuda.empty_cache()
 
-    np.save(f"{results_folder}/results.npy", results_np)
+    results_file = f"{results_folder}/results.npy"
+    np.save(results_file, results_np)
+    print(f"results saved to {results_file}")
 
 if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
