@@ -5,10 +5,12 @@ import time
 import cv2
 import numpy as np
 import torch
+import torch.nn as nn
+import torchvision.models as models
 from torch.utils.tensorboard import SummaryWriter
 import visdom
 
-from run_inerf_helpers import screwToMatrixExp4_torch, TestIfSO3
+from run_inerf_helpers import screwToMatrixExp4_torch, screwToMatrixExp4_torch_batch, TestIfSO3
 
 # some viz tools
 from utils import check_pose_error, load_data, rotation_matrix_from_axis_angle, sample_rays_to_render, sample_unit_sphere
@@ -150,6 +152,14 @@ def config_parser():
     # lets always save results? at leasty the numpy is at the moment, leaving this as is
     parser.add_argument("--save_results", action="store_true", help="store training results in .txt files")
 
+    # posenet
+    parser.add_argument("--load_posenet_model", type=str, default=None, help='pose net for init')
+    parser.add_argument("--predict_r_12", action='store_true',
+                        help='mobile net pose output dimension')
+    parser.add_argument("--use_just_pose_loss", action='store_true',
+                        help='pose loss only, no image rendering loss... this doesn\'t do anything, mostly for printing')
+
+
     return parser
 
 
@@ -192,6 +202,17 @@ def train():
 
     if args.use_disparity:
         results_folder = os.path.join(basedir, expname, f"results_with_disparity_bs{args.batchsize}_{args.sample_rays}")
+    elif args.load_posenet_model is not None:
+        if args.predict_r_12:
+            if args.use_just_pose_loss:
+                results_folder = os.path.join(basedir, expname, f"results_posenet_r12_poseloss_bs{args.batchsize}_{args.sample_rays}")
+            else:
+                results_folder = os.path.join(basedir, expname, f"results_posenet_r12_posephotoloss_bs{args.batchsize}_{args.sample_rays}")
+        else:
+            if args.use_just_pose_loss:
+                results_folder = os.path.join(basedir, expname, f"results_posenet_r6_poseloss_bs{args.batchsize}_{args.sample_rays}")
+            else:
+                results_folder = os.path.join(basedir, expname, f"results_posenet_r6_posephotoloss_bs{args.batchsize}_{args.sample_rays}")
     else:
         results_folder = os.path.join(basedir, expname, f"results_bs{args.batchsize}_{args.sample_rays}")
     os.makedirs(results_folder, exist_ok=True)
@@ -225,6 +246,21 @@ def train():
     print("Num images: ", len(img_idxs))
     print("Use disparity? ", args.use_disparity)
 
+    # posenet
+    if args.load_posenet_model is not None:
+        mobilenet_v2 = models.mobilenet_v2(pretrained=False)
+        num_ftrs = mobilenet_v2.classifier[1].in_features
+        if args.predict_r_12:
+            mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 12)
+        else:
+            mobilenet_v2.classifier[1] = nn.Linear(num_ftrs, 6)
+        mobilenet_v2.to(device)
+
+        print_str = "R12" if args.predict_r_12 else "R6"
+        print(f"-----Loaded mobile net outputting in {print_str} from {args.load_posenet_model}")
+        mobilenet_v2.load_state_dict(torch.load(args.load_posenet_model))
+        mobilenet_v2.eval()
+
     '''
     we will store all the results in a len(img_idxs) x num_iterations x 2 array
     the last index will be either for translation (0) or rotation (1) error in meters and degrees respectively
@@ -257,30 +293,50 @@ def train():
             target_disp = torch.from_numpy(disp_rgt).float().to(device)
 
         '''
-        random pose offset init
+        pose init - random or posenet
         '''
-        if args.dataset_type == 'llff':
-            t_rng = 0.1
-            r_rng = 40
-        elif args.dataset_type == 'blender':
-            t_rng = 0.2
-            r_rng = 40
-        random_axis = sample_unit_sphere()
-        random_angle_rads = np.deg2rad(np.random.uniform(-r_rng, r_rng))
-        random_translation = np.random.uniform(-t_rng, t_rng, 3)
-        random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle_rads)
+        if args.load_posenet_model is None:
+            if args.dataset_type == 'llff':
+                t_rng = 0.1
+                r_rng = 40
+            elif args.dataset_type == 'blender':
+                t_rng = 0.2
+                r_rng = 40
+            random_axis = sample_unit_sphere()
+            random_angle_rads = np.deg2rad(np.random.uniform(-r_rng, r_rng))
+            random_translation = np.random.uniform(-t_rng, t_rng, 3)
+            random_rot_mat3 = rotation_matrix_from_axis_angle(random_axis, random_angle_rads)
 
-        T_rotated_original = np.eye(4)
-        T_rotated_original[:3, :3] = random_rot_mat3
+            T_rotated_original = np.eye(4)
+            T_rotated_original[:3, :3] = random_rot_mat3
 
-        T_translated_original = np.eye(4)
-        T_translated_original[:3, 3] = random_translation
+            T_translated_original = np.eye(4)
+            T_translated_original[:3, 3] = random_translation
 
-        T_offset_original = np.matmul(T_translated_original, T_rotated_original)
+            T_offset_original = np.matmul(T_translated_original, T_rotated_original)
 
-        T_world_cameraInit = np.matmul(T_offset_original, T_world_camera).astype(float)
-        T_world_cameraInit = torch.from_numpy(T_world_cameraInit).float().to(device)
-        print(f"offset: t: {random_translation}, rot: {random_angle_rads * 180 / np.pi} degrees around {random_axis}")
+            T_world_cameraInit = np.matmul(T_offset_original, T_world_camera).astype(float)
+            T_world_cameraInit = torch.from_numpy(T_world_cameraInit).float().to(device)
+
+            print(f"offset: t: {random_translation}, rot: {random_angle_rads * 180 / np.pi} degrees around {random_axis}")
+        else:
+            output = mobilenet_v2(target.permute((2, 0, 1)).unsqueeze(0))
+            if args.predict_r_12:
+                output = output.reshape((1,3,4))
+                rotation_mat_hat = output[:, :3, :3]
+                translation_vec_hat = output[:, :3, 3]
+                u,s,vt = torch.linalg.svd(rotation_mat_hat, full_matrices=False)
+                rotation_svd_hat = torch.bmm(u,vt)
+                pose_svd_hat_3x4 = torch.cat((rotation_svd_hat, translation_vec_hat.unsqueeze(2)), dim=2).squeeze()
+                pose_svd_hat_4x4 = torch.cat((pose_svd_hat_3x4, torch.Tensor([0, 0, 0, 1]).unsqueeze(0)), axis=0)
+                T_world_cameraInit = pose_svd_hat_4x4.detach()
+            else:
+                se3_as_4x4_batch = screwToMatrixExp4_torch_batch(output)
+                T_world_cameraInit = se3_as_4x4_batch.squeeze().detach()
+
+            t_err, rot_err = check_pose_error(T_world_cameraInit.detach().cpu().numpy(), T_world_camera)
+            print(f"offset from posenet: t: {t_err}, rot: {rot_err} degrees around unknown axis")
+
 
         if args.dbg:
             initial_scene = PlotlyScene(
